@@ -1,0 +1,73 @@
+# ============================================================
+#  Ritardometro - configurazione
+# ============================================================
+
+# Durata della parte "parlata" del talk, in minuti (domande escluse)
+durata_minuti = 30
+
+# Minuti riservati alle domande: a fine talk parte il conto alla rovescia delle Q&A.
+# 0 = nessun conto alla rovescia per le domande
+domande_minuti = 10
+
+# Numero totale di slide.
+# 0 = usa il totale letto dallo schermo (se il contatore mostra "12 / 40")
+totale_slide = 30
+
+# Avvia il timer da solo appena l'OCR vede che sei passato dalla slide 1 alla 2
+avvio_automatico = true
+
+# Entro quanti secondi di scarto sei considerato "in linea"
+tolleranza_secondi = 60
+
+# Oltre quanti secondi di ritardo l'avatar va nel panico
+panico_secondi = 180
+
+# Dimensione dell'overlay (1.0 = normale, 1.5 = più grande)
+scala = 1.0
+
+# Opacità del riquadro dietro all'avatar (0.0 = invisibile, 1.0 = pieno)
+opacita_sfondo = 0.70
+
+# Dove appare l'overlay: "alto-sinistra", "alto-destra", "basso-sinistra", "basso-destra"
+# (puoi comunque trascinarlo dove vuoi)
+posizione = "alto-destra"
+
+# Distanza dal bordo dello schermo, in punti
+margine = 24
+
+[ocr]
+# Legge il numero di slide dallo schermo. false = solo timer
+attivo = true
+
+# Monitor da leggere: 0 = principale, 1 = primo monitor, 2 = secondo, ...
+monitor = 0
+
+# Rettangolo dove si trova il contatore delle slide, in frazioni dello schermo
+# (0.0 = bordo sinistro/alto, 1.0 = bordo destro/basso).
+# Default: angolo in basso a destra, dove Marp mette la paginazione.
+x = 0.85
+y = 0.88
+larghezza = 0.15
+altezza = 0.12
+
+# Ogni quanti millisecondi leggere lo schermo
+intervallo_ms = 500
+
+# Ingrandimento dell'immagine prima dell'OCR (i numeri piccoli si leggono meglio)
+ingrandimento = 3
+
+# true = salva ogni cattura in "ritardometro-debug.png" accanto all'eseguibile,
+# utile per calibrare il rettangolo qui sopra
+salva_debug = false
+
+# ------------------------------------------------------------
+#  Momenti speciali: l'avatar sventola una bandierina.
+#  Usa "percentuale" (del talk) oppure "mancano_minuti".
+# ------------------------------------------------------------
+[[milestone]]
+percentuale = 50
+testo = "METÀ!"
+
+[[milestone]]
+mancano_minuti = 5
+testo = "-5 MIN"
