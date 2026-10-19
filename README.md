@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="docs/banner.png" alt="Ritardometro Banner" width="100%">
+</p>
+
 # Ritardometro
 
 Il timer per talk che ti dice **se sei in anticipo o in ritardo**, con la caricatura animata dello speaker che fa il tifo per te (o si dispera) davanti al pubblico.
