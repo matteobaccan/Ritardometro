@@ -1,0 +1,143 @@
+name: Release
+
+# Si attiva creando e pushando un tag di versione, es:
+#   git tag v0.2.0 && git push origin v0.2.0
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag esistente da (ri)pubblicare, es. v0.2.0"
+        required: true
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  TAG: ${{ github.event.inputs.tag || github.ref_name }}
+
+jobs:
+  verifica-versione:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+      - name: Il tag corrisponde a Cargo.toml?
+        run: |
+          versione=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"(.*)"/\1/')
+          if [ "v$versione" != "$TAG" ]; then
+            echo "::error::Il tag $TAG non corrisponde alla versione in Cargo.toml (v$versione)"
+            exit 1
+          fi
+
+  build:
+    needs: verifica-versione
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            nome: windows-x64
+            exe: ritardometro.exe
+          - os: ubuntu-22.04
+            target: x86_64-unknown-linux-gnu
+            nome: linux-x64
+            exe: ritardometro
+          - os: macos-14
+            target: aarch64-apple-darwin
+            nome: macos-arm64
+            exe: ritardometro
+          - os: macos-14
+            target: x86_64-apple-darwin
+            nome: macos-x64
+            exe: ritardometro
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Dipendenze Linux (X11/Wayland/OpenGL)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+
+      - name: Test
+        run: cargo test --target ${{ matrix.target }}
+
+      - name: Build release
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Pacchetto (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dir = "ritardometro-$env:TAG-${{ matrix.nome }}"
+          New-Item -ItemType Directory -Force $dir | Out-Null
+          Copy-Item target/${{ matrix.target }}/release/${{ matrix.exe }} $dir/
+          Copy-Item ritardometro.toml, README.md, LICENSE $dir/
+          Compress-Archive -Path $dir -DestinationPath "$dir.zip" -Force
+          "ARCHIVIO=$dir.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+      - name: Pacchetto (Linux/macOS)
+        if: runner.os != 'Windows'
+        run: |
+          dir="ritardometro-$TAG-${{ matrix.nome }}"
+          mkdir -p "$dir"
+          cp target/${{ matrix.target }}/release/${{ matrix.exe }} "$dir/"
+          chmod +x "$dir/${{ matrix.exe }}"
+          cp ritardometro.toml README.md LICENSE "$dir/"
+          tar -czf "$dir.tar.gz" "$dir"
+          echo "ARCHIVIO=$dir.tar.gz" >> "$GITHUB_ENV"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.nome }}
+          path: ${{ env.ARCHIVIO }}
+
+  pubblica:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Checksum
+        run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.TAG }}
+          name: Ritardometro ${{ env.TAG }}
+          files: dist/*
+          generate_release_notes: true
+          body: |
+            ## Download
+            | Sistema | File |
+            |---|---|
+            | Windows 10/11 (x64) | `ritardometro-${{ env.TAG }}-windows-x64.zip` |
+            | Linux (x64) | `ritardometro-${{ env.TAG }}-linux-x64.tar.gz` |
+            | macOS Apple Silicon (M1/M2/M3…) | `ritardometro-${{ env.TAG }}-macos-arm64.tar.gz` |
+            | macOS Intel | `ritardometro-${{ env.TAG }}-macos-x64.tar.gz` |
+
+            > La lettura automatica della slide (OCR) è disponibile solo su Windows;
+            > su Linux e macOS il Ritardometro funziona come timer (slide con frecce ← →).
+            >
+            > macOS: il binario non è firmato. Al primo avvio usa tasto destro → Apri,
+            > oppure `xattr -d com.apple.quarantine ./ritardometro`.

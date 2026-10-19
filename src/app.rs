@@ -2,7 +2,7 @@
 
 use crate::avatar::{self, Bandiera, StatoAvatar, GIALLO, ROSSO, VERDE};
 use crate::config::{Caricata, Config, Posizione};
-use crate::ocr::{self, Lettura, Messaggio};
+use crate::ocr::{self, Lettura, Messaggio, StatoOcrCondiviso};
 use crate::pacing::{self, Andatura, Bandierine, Cronometro, Ritmo};
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Id, Key, Pos2, Rect, Sense, Stroke, Vec2,
@@ -10,6 +10,7 @@ use eframe::egui::{
 };
 use std::path::PathBuf;
 use std::sync::mpsc::Receiver;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// Dimensioni dell'overlay a scala 1.
@@ -18,6 +19,229 @@ pub const ALTEZZA: f32 = 340.0;
 
 const ARANCIO: Color32 = Color32::from_rgb(255, 160, 60);
 const GRIGIO: Color32 = Color32::from_rgb(190, 190, 190);
+
+#[cfg(windows)]
+mod win32_drag {
+    use std::ffi::c_void;
+    use std::sync::atomic::{AtomicIsize, Ordering};
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    pub struct Point {
+        pub x: i32,
+        pub y: i32,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy, Default)]
+    pub struct Rect {
+        pub left: i32,
+        pub top: i32,
+        pub right: i32,
+        pub bottom: i32,
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        pub fn GetCursorPos(lpPoint: *mut Point) -> i32;
+        pub fn GetActiveWindow() -> isize;
+        pub fn GetWindowRect(hWnd: isize, lpRect: *mut Rect) -> i32;
+        pub fn SetWindowPos(
+            hWnd: isize,
+            hWndInsertAfter: isize,
+            X: i32,
+            Y: i32,
+            cx: i32,
+            cy: i32,
+            uFlags: u32,
+        ) -> i32;
+        pub fn GetAsyncKeyState(vKey: i32) -> i16;
+        pub fn GetWindowLongW(hWnd: isize, nIndex: i32) -> i32;
+        pub fn SetWindowLongW(hWnd: isize, nIndex: i32, dwNewLong: i32) -> i32;
+        pub fn GetWindowLongPtrW(hWnd: isize, nIndex: i32) -> isize;
+        pub fn SetWindowLongPtrW(hWnd: isize, nIndex: i32, dwNewLong: isize) -> isize;
+        pub fn CallWindowProcW(
+            lpPrevWndFunc: isize,
+            hWnd: isize,
+            Msg: u32,
+            wParam: usize,
+            lParam: isize,
+        ) -> isize;
+        pub fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> isize;
+    }
+
+    #[link(name = "dwmapi")]
+    unsafe extern "system" {
+        pub fn DwmSetWindowAttribute(
+            hwnd: isize,
+            dwAttribute: u32,
+            pvAttribute: *const c_void,
+            cbAttribute: u32,
+        ) -> i32;
+    }
+
+    pub const VK_LBUTTON: i32 = 0x01;
+    pub const HWND_TOPMOST: isize = -1;
+    pub const SWP_NOSIZE: u32 = 0x0001;
+    pub const SWP_NOZORDER: u32 = 0x0004;
+    pub const SWP_NOACTIVATE: u32 = 0x0010;
+    pub const SWP_FRAMECHANGED: u32 = 0x0020;
+
+    /// Posiziona una finestra identificata dal titolo nelle coordinate fisiche esatte
+    /// `(x, y, w, h)` di qualsiasi monitor (anche con DPI diversi) e ne rimuove il bordo.
+    pub fn posiziona_finestra_per_titolo(titolo: &str, x: i32, y: i32, w: i32, h: i32) {
+        let mut wide: Vec<u16> = titolo.encode_utf16().collect();
+        wide.push(0);
+        unsafe {
+            let hwnd = FindWindowW(std::ptr::null(), wide.as_ptr());
+            if hwnd != 0 {
+                rimuovi_bordo_finestra(hwnd);
+                SetWindowPos(hwnd, HWND_TOPMOST, x, y, w, h, SWP_NOACTIVATE);
+            }
+        }
+    }
+
+    const GWLP_WNDPROC: i32 = -4;
+    const GWL_STYLE: i32 = -16;
+    const GWL_EXSTYLE: i32 = -20;
+    const WM_NCCALCSIZE: u32 = 0x0083;
+    const WM_NCPAINT: u32 = 0x0085;
+
+    const WS_POPUP: u32 = 0x8000_0000;
+    const WS_CAPTION: u32 = 0x00C0_0000;
+    const WS_BORDER: u32 = 0x0080_0000;
+    const WS_DLGFRAME: u32 = 0x0040_0000;
+    const WS_THICKFRAME: u32 = 0x0004_0000;
+    const WS_EX_DLGMODALFRAME: u32 = 0x0000_0001;
+    const WS_EX_WINDOWEDGE: u32 = 0x0000_0100;
+    const WS_EX_CLIENTEDGE: u32 = 0x0000_0200;
+    const WS_EX_STATICEDGE: u32 = 0x0002_0000;
+
+    const DWMWA_NCRENDERING_POLICY: u32 = 2;
+    const DWMNCRP_DISABLED: u32 = 1;
+    const DWMWA_WINDOW_CORNER_PREFERENCE: u32 = 33;
+    const DWMWCP_DONOTROUND: u32 = 1;
+    const DWMWA_BORDER_COLOR: u32 = 34;
+    const DWMWA_COLOR_NONE: u32 = 0xFFFF_FFFE;
+
+    static OLD_WNDPROC: AtomicIsize = AtomicIsize::new(0);
+
+    /// Intercetta `WM_NCCALCSIZE` prima della WndProc di `winit`.
+    /// Quando `MARKER_UNDECORATED_SHADOW` è attivo, `winit` esegue `params.rgrc[0].top += 1`,
+    /// lasciando una striscia non-client di 1px in cima alla finestra che Windows disegna bianca.
+    /// Restituendo `0` senza alterare `rgrc[0]`, l'area client trasparente copre il 100% della finestra.
+    unsafe extern "system" fn wndproc_senza_bordo(
+        hwnd: isize,
+        msg: u32,
+        wparam: usize,
+        lparam: isize,
+    ) -> isize {
+        if msg == WM_NCCALCSIZE || msg == WM_NCPAINT {
+            return 0;
+        }
+        let old = OLD_WNDPROC.load(Ordering::Relaxed);
+        if old != 0 {
+            unsafe { CallWindowProcW(old, hwnd, msg, wparam, lparam) }
+        } else {
+            0
+        }
+    }
+
+    /// Rimuove la righina bianca superiore di 1px e il bordo/ombra che `egui-winit` attiva
+    /// con `with_undecorated_shadow(true)`.
+    pub fn rimuovi_bordo_finestra(hwnd: isize) {
+        if hwnd == 0 {
+            return;
+        }
+        unsafe {
+            let nostra_proc = wndproc_senza_bordo as *const () as isize;
+            let prev = GetWindowLongPtrW(hwnd, GWLP_WNDPROC);
+            let style = GetWindowLongW(hwnd, GWL_STYLE) as u32;
+            let ha_bordo_style = (style & (WS_CAPTION | WS_BORDER | WS_DLGFRAME | WS_THICKFRAME)) != 0
+                || (style & WS_POPUP) == 0;
+
+            if prev == nostra_proc && !ha_bordo_style {
+                return;
+            }
+
+            let mut rect = Rect::default();
+            let ha_rect = GetWindowRect(hwnd, &mut rect) != 0;
+
+            if prev != 0 && prev != nostra_proc {
+                OLD_WNDPROC.store(prev, Ordering::Relaxed);
+                SetWindowLongPtrW(hwnd, GWLP_WNDPROC, nostra_proc);
+            }
+
+            let ncrp: u32 = DWMNCRP_DISABLED;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_NCRENDERING_POLICY,
+                (&ncrp as *const u32).cast::<c_void>(),
+                std::mem::size_of::<u32>() as u32,
+            );
+            let corner: u32 = DWMWCP_DONOTROUND;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_WINDOW_CORNER_PREFERENCE,
+                (&corner as *const u32).cast::<c_void>(),
+                std::mem::size_of::<u32>() as u32,
+            );
+            let border_none: u32 = DWMWA_COLOR_NONE;
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_BORDER_COLOR,
+                (&border_none as *const u32).cast::<c_void>(),
+                std::mem::size_of::<u32>() as u32,
+            );
+
+            let nuovo_style = (style
+                & !(WS_CAPTION | WS_BORDER | WS_DLGFRAME | WS_THICKFRAME))
+                | WS_POPUP;
+            SetWindowLongW(hwnd, GWL_STYLE, nuovo_style as i32);
+
+            let ex_style = GetWindowLongW(hwnd, GWL_EXSTYLE) as u32;
+            let nuovo_ex = ex_style
+                & !(WS_EX_DLGMODALFRAME
+                    | WS_EX_WINDOWEDGE
+                    | WS_EX_CLIENTEDGE
+                    | WS_EX_STATICEDGE);
+            SetWindowLongW(hwnd, GWL_EXSTYLE, nuovo_ex as i32);
+
+            if ha_rect {
+                SetWindowPos(
+                    hwnd,
+                    0,
+                    rect.left,
+                    rect.top,
+                    rect.right - rect.left,
+                    rect.bottom - rect.top,
+                    SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED,
+                );
+            }
+        }
+    }
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+struct TrascinamentoWin32 {
+    hwnd: isize,
+    offset_cx: i32,
+    offset_cy: i32,
+    start_x: i32,
+    start_y: i32,
+    mosso: bool,
+}
+
+#[cfg(windows)]
+#[derive(Clone, Copy)]
+struct ResizeWin32 {
+    hwnd: isize,
+    dir: egui::ResizeDirection,
+    start_cur: win32_drag::Point,
+    start_rect: win32_drag::Rect,
+    scala0: f32,
+}
 
 pub struct Ritardometro {
     cfg: Config,
@@ -32,9 +256,27 @@ pub struct Ritardometro {
     candidata: Option<Lettura>,
     conferme: u8,
     ocr_rx: Option<Receiver<Messaggio>>,
+    ocr_condiviso: Arc<Mutex<StatoOcrCondiviso>>,
     stato_ocr: String,
 
     posizionato: bool,
+    resize_attivo: Option<(egui::ResizeDirection, Pos2, f32)>,
+    #[cfg(windows)]
+    hwnd_principale: isize,
+    #[cfg(windows)]
+    bordo_rimosso: bool,
+    #[cfg(windows)]
+    trascinamento: Option<TrascinamentoWin32>,
+    #[cfg(windows)]
+    resize_win32: Option<ResizeWin32>,
+    #[cfg(windows)]
+    trascinato_appena: bool,
+
+    menu_aperto: bool,
+    menu_pos: Option<Pos2>,
+    num_monitor: usize,
+    evidenzia_ocr: Option<(Instant, ocr::InfoZonaOcr)>,
+
     nascita: Instant,
     /// Modalità demo: simula un talk a velocità accelerata.
     demo: Option<Instant>,
@@ -45,16 +287,29 @@ const VELOCITA_DEMO: f32 = 30.0;
 
 impl Ritardometro {
     pub fn new(cc: &eframe::CreationContext<'_>, caricata: Caricata, demo: bool) -> Self {
+        // Disattiva lo zoom da tastiera interno di egui (Ctrl+ / Ctrl- / Ctrl+0):
+        // altrimenti egui modifica `zoom_factor` con un frame di ritardo rispetto a `InnerSize`,
+        // annullando il primo passo quando si inverte direzione tra Ctrl+ e Ctrl-.
+        cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
+        cc.egui_ctx.set_theme(egui::Theme::Dark);
+        cc.egui_ctx.set_visuals(tema_scuro_contrasto());
+
         let Caricata {
             config: cfg,
             percorso,
             avviso,
         } = caricata;
 
+        let ocr_condiviso = Arc::new(Mutex::new(StatoOcrCondiviso {
+            cfg: cfg.ocr.clone(),
+            centro_finestra: None,
+            in_pausa: false,
+        }));
+
         let (ocr_rx, stato_ocr) = if demo {
             (None, format!("demo: talk simulato a {VELOCITA_DEMO}x"))
         } else if cfg.ocr.attivo {
-            match ocr::avvia(cfg.ocr.clone(), cc.egui_ctx.clone()) {
+            match ocr::avvia(Arc::clone(&ocr_condiviso), cc.egui_ctx.clone()) {
                 Ok(rx) => (Some(rx), "OCR in avvio…".to_string()),
                 Err(e) => (None, e),
             }
@@ -78,8 +333,24 @@ impl Ritardometro {
             candidata: None,
             conferme: 0,
             ocr_rx,
+            ocr_condiviso,
             stato_ocr,
             posizionato: false,
+            resize_attivo: None,
+            #[cfg(windows)]
+            hwnd_principale: 0,
+            #[cfg(windows)]
+            bordo_rimosso: false,
+            #[cfg(windows)]
+            trascinamento: None,
+            #[cfg(windows)]
+            resize_win32: None,
+            #[cfg(windows)]
+            trascinato_appena: false,
+            menu_aperto: false,
+            menu_pos: None,
+            num_monitor: ocr::numero_monitor(),
+            evidenzia_ocr: None,
             nascita: Instant::now(),
             demo: demo.then(Instant::now),
         }
@@ -104,16 +375,23 @@ impl Ritardometro {
     }
 
     fn totale(&self) -> Option<u32> {
-        if self.cfg.totale_slide > 0 {
-            Some(self.cfg.totale_slide)
-        } else {
-            self.totale_letto
-        }
+        self.totale_letto
+            .or_else(|| (self.cfg.totale_slide > 0).then_some(self.cfg.totale_slide))
+    }
+
+    fn in_pausa(&self) -> bool {
+        !self.crono.in_corso() && !self.crono.mai_avviato()
+    }
+
+    fn alterna_pausa(&mut self) {
+        self.crono.alterna();
+        self.sincronizza_ocr_condiviso();
     }
 
     fn azzera(&mut self) {
         self.crono.azzera();
         self.bandierine.azzera();
+        self.sincronizza_ocr_condiviso();
     }
 
     fn imposta_slide(&mut self, nuova: u32) {
@@ -124,22 +402,37 @@ impl Ritardometro {
             if let Some(v) = vecchia {
                 if nuova > v {
                     self.crono.avvia();
+                    self.sincronizza_ocr_condiviso();
                 }
             }
         }
     }
 
-    /// Legge i messaggi del thread OCR. Una lettura viene accettata solo se
-    /// arriva uguale due volte di fila, così un errore isolato non fa saltare l'avatar.
+    /// Legge i messaggi del thread OCR. Le letture con totale (`slide/totale`), la prima lettura
+    /// o un avanzamento adiacente (`±1`) vengono accettate subito; i salti isolati di un singolo
+    /// numero richiedono due letture uguali di fila per evitare falsi positivi.
     fn ricevi_ocr(&mut self) {
         let Some(rx) = &self.ocr_rx else { return };
         let messaggi: Vec<Messaggio> = rx.try_iter().collect();
+        if self.in_pausa() {
+            return;
+        }
         for m in messaggi {
             match m {
                 Messaggio::Lettura(l) => {
                     if let Some(tot) = self.totale() {
                         if l.slide > tot && l.totale.is_none() {
                             self.stato_ocr = format!("letto {} (oltre {tot}): ignoro", l.slide);
+                            continue;
+                        }
+                        // Se sappiamo già che il contatore ha un totale (es. "2 / 30") e in un
+                        // frame l'OCR perde la slide corrente leggendo solo "30", non saltare a 30!
+                        if self.totale_letto == Some(tot)
+                            && l.totale.is_none()
+                            && l.slide == tot
+                            && self.slide.is_none_or(|cur| cur + 1 < tot)
+                        {
+                            self.stato_ocr = format!("OCR: visto solo il totale (/{tot})");
                             continue;
                         }
                     }
@@ -149,14 +442,22 @@ impl Ritardometro {
                         self.candidata = Some(l);
                         self.conferme = 1;
                     }
-                    if self.conferme >= 2 {
+                    let immediata = l.totale.is_some()
+                        || self.slide.is_none()
+                        || self
+                            .slide
+                            .is_some_and(|cur| cur.abs_diff(l.slide) <= 1);
+                    if immediata || self.conferme >= 2 {
                         if let Some(t) = l.totale {
                             self.totale_letto = Some(t);
                         }
                         if self.slide != Some(l.slide) {
                             self.imposta_slide(l.slide);
                         }
-                        self.stato_ocr = "OCR ok".into();
+                        self.stato_ocr = match self.totale() {
+                            Some(tot) => format!("OCR ok: slide {}/{tot}", l.slide),
+                            None => format!("OCR ok: slide {}", l.slide),
+                        };
                     }
                 }
                 Messaggio::Niente(testo) => {
@@ -173,28 +474,47 @@ impl Ritardometro {
     }
 
     fn tastiera(&mut self, ctx: &egui::Context) {
-        let (spazio, r, piu, meno, destra, sinistra, esci) = ctx.input(|i| {
+        let (spazio, r, piu, meno, ctrl, zero, destra, sinistra, esci, scroll_y) = ctx.input(|i| {
             (
                 i.key_pressed(Key::Space),
                 i.key_pressed(Key::R),
                 i.key_pressed(Key::Plus) || i.key_pressed(Key::Equals),
                 i.key_pressed(Key::Minus),
+                i.modifiers.ctrl || i.modifiers.command,
+                i.key_pressed(Key::Num0),
                 i.key_pressed(Key::ArrowRight) || i.key_pressed(Key::PageDown),
                 i.key_pressed(Key::ArrowLeft) || i.key_pressed(Key::PageUp),
                 i.key_pressed(Key::Escape) || i.key_pressed(Key::Q),
+                i.smooth_scroll_delta.y,
             )
         });
         if spazio {
-            self.crono.alterna();
+            self.alterna_pausa();
         }
         if r {
             self.azzera();
         }
-        if piu {
-            self.crono.correggi(60.0);
+        if ctrl {
+            if piu {
+                self.cambia_scala(ctx, self.cfg.scala + 0.15);
+            }
+            if meno {
+                self.cambia_scala(ctx, self.cfg.scala - 0.15);
+            }
+            if zero {
+                self.cambia_scala(ctx, 1.0);
+            }
+        } else {
+            if piu {
+                self.crono.correggi(60.0);
+            }
+            if meno {
+                self.crono.correggi(-60.0);
+            }
         }
-        if meno {
-            self.crono.correggi(-60.0);
+        if scroll_y.abs() > 0.1 {
+            let passo = (scroll_y / 50.0).clamp(-0.3, 0.3);
+            self.cambia_scala(ctx, self.cfg.scala + passo);
         }
         if destra {
             let s = self.slide.unwrap_or(0) + 1;
@@ -205,7 +525,23 @@ impl Ritardometro {
             self.imposta_slide(s);
         }
         if esci {
-            ctx.send_viewport_cmd(ViewportCommand::Close);
+            if self.menu_aperto {
+                self.menu_aperto = false;
+            } else {
+                ctx.send_viewport_cmd(ViewportCommand::Close);
+            }
+        }
+    }
+
+    fn cambia_scala(&mut self, ctx: &egui::Context, nuova: f32) {
+        let nuova = nuova.clamp(0.5, 3.0);
+        if (nuova - self.cfg.scala).abs() > 0.005 {
+            self.cfg.scala = nuova;
+            ctx.send_viewport_cmd_to(
+                egui::ViewportId::ROOT,
+                ViewportCommand::InnerSize(Vec2::new(LARGHEZZA, ALTEZZA) * self.cfg.scala),
+            );
+            ctx.request_repaint();
         }
     }
 
@@ -234,54 +570,365 @@ impl Ritardometro {
         self.posizionato = true;
     }
 
-    fn menu(&mut self, ui: &mut egui::Ui) {
-        let etichetta = if self.crono.in_corso() {
-            "Pausa"
-        } else {
-            "Avvia"
-        };
-        if ui.button(format!("{etichetta}   (spazio)")).clicked() {
-            self.crono.alterna();
-            ui.close();
+    /// Mostra il pannello di configurazione in una finestra separata indipendente
+    /// dalla dimensione dell'overlay, così non rimane mai schiacciato su finestre piccole.
+    fn mostra_finestra_menu(&mut self, ctx: &egui::Context) {
+        if !self.menu_aperto {
+            return;
         }
-        if ui.button("Azzera   (R)").clicked() {
-            self.azzera();
-            ui.close();
+
+        let dim_menu = Vec2::new(380.0, 585.0);
+        let mut builder = egui::ViewportBuilder::default()
+            .with_title(concat!("Ritardometro v", env!("CARGO_PKG_VERSION"), " — Configurazione"))
+            .with_inner_size(dim_menu)
+            .with_min_inner_size(dim_menu)
+            .with_resizable(true)
+            .with_minimize_button(false)
+            .with_maximize_button(false)
+            .with_always_on_top();
+
+        if let Some(pos) = self.menu_pos {
+            builder = builder.with_position(pos);
         }
-        ui.separator();
-        ui.horizontal(|ui| {
-            ui.label("Tempo");
-            if ui.button("-1 min").clicked() {
-                self.crono.correggi(-60.0);
+
+        let id_menu = egui::ViewportId::from_hash_of("ritardometro_menu_config");
+        ctx.show_viewport_immediate(id_menu, builder, |ui, _class| {
+            ui.ctx().set_theme(egui::Theme::Dark);
+            ui.ctx().set_visuals(tema_scuro_contrasto());
+
+            let chiudi_input = ui.input(|i| {
+                i.viewport().close_requested() || i.key_pressed(Key::Escape)
+            });
+            if chiudi_input {
+                self.menu_aperto = false;
             }
-            if ui.button("+1 min").clicked() {
-                self.crono.correggi(60.0);
+
+            let frame = egui::Frame::new()
+                .fill(Color32::from_rgb(26, 28, 34))
+                .inner_margin(14.0);
+            egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+                ui.spacing_mut().item_spacing = Vec2::new(8.0, 7.0);
+                self.disegna_contenuto_menu(ui, ctx);
+            });
+        });
+    }
+
+    fn disegna_contenuto_menu(&mut self, ui: &mut egui::Ui, ctx_root: &egui::Context) {
+        ui.horizontal(|ui| {
+            let etichetta = if self.crono.in_corso() {
+                "Pausa (spazio)"
+            } else {
+                "Avvia (spazio)"
+            };
+            if ui.button(etichetta).clicked() {
+                self.alterna_pausa();
+            }
+            if ui.button("Azzera (R)").clicked() {
+                self.azzera();
             }
         });
+
+        ui.separator();
+
+        egui::Grid::new("griglia_controlli")
+            .num_columns(2)
+            .spacing([12.0, 8.0])
+            .show(ui, |ui| {
+                ui.label("Tempo:");
+                ui.horizontal(|ui| {
+                    if ui.button("-1 min").clicked() {
+                        self.crono.correggi(-60.0);
+                    }
+                    if ui.button("+1 min").clicked() {
+                        self.crono.correggi(60.0);
+                    }
+                });
+                ui.end_row();
+
+                ui.label("Slide:");
+                ui.horizontal(|ui| {
+                    if ui.button("-1").clicked() {
+                        let s = self.slide.unwrap_or(2).saturating_sub(1).max(1);
+                        self.imposta_slide(s);
+                    }
+                    if ui.button("+1").clicked() {
+                        let s = self.slide.unwrap_or(0) + 1;
+                        self.imposta_slide(s);
+                    }
+                    if let Some(sl) = self.slide {
+                        ui.label(format!("({sl}/{})", self.totale().unwrap_or(0)));
+                    }
+                });
+                ui.end_row();
+
+                ui.label(format!("Dimensione ({:.0}%):", self.cfg.scala * 100.0));
+                ui.horizontal(|ui| {
+                    if ui.button(" - ").clicked() {
+                        self.cambia_scala(ctx_root, self.cfg.scala - 0.15);
+                    }
+                    if ui.button(" + ").clicked() {
+                        self.cambia_scala(ctx_root, self.cfg.scala + 0.15);
+                    }
+                    if ui.button("100%").clicked() {
+                        self.cambia_scala(ctx_root, 1.0);
+                    }
+                });
+                ui.end_row();
+
+                // Riga 1: Auto
+                ui.label("Monitor OCR:");
+                if ui
+                    .selectable_label(self.cfg.ocr.monitor == 0, "Auto (segue il Ritardometro)")
+                    .clicked()
+                {
+                    self.cfg.ocr.monitor = 0;
+                    self.sincronizza_ocr_condiviso();
+                    self.avvia_evidenziazione_ocr();
+                    ctx_root.request_repaint();
+                }
+                ui.end_row();
+
+                // Riga 2: I monitor trovati
+                ui.label("Schermi trovati:");
+                ui.horizontal(|ui| {
+                    for idx in 1..=self.num_monitor.max(1) {
+                        let nome = format!("Mon {idx}");
+                        if ui.selectable_label(self.cfg.ocr.monitor == idx, nome).clicked() {
+                            self.cfg.ocr.monitor = idx;
+                            self.sincronizza_ocr_condiviso();
+                            self.avvia_evidenziazione_ocr();
+                            ctx_root.request_repaint();
+                        }
+                    }
+                });
+                ui.end_row();
+
+                // Riga 3: Mostra zona
+                ui.label("");
+                if ui
+                    .button("Mostra zona OCR sullo schermo")
+                    .on_hover_text("Illumina sul monitor scelto il riquadro dove l'OCR cerca il numero di slide")
+                    .clicked()
+                {
+                    self.avvia_evidenziazione_ocr();
+                    ctx_root.request_repaint();
+                }
+                ui.end_row();
+
+                ui.label("Frequenza OCR:");
+                ui.horizontal(|ui| {
+                    for (ms, etichetta) in [(200_u64, "200 ms (veloce)"), (350, "350 ms"), (500, "500 ms")] {
+                        if ui
+                            .selectable_label(self.cfg.ocr.intervallo_ms == ms, etichetta)
+                            .clicked()
+                        {
+                            self.cfg.ocr.intervallo_ms = ms;
+                            self.sincronizza_ocr_condiviso();
+                        }
+                    }
+                });
+                ui.end_row();
+            });
+
+        if ui
+            .checkbox(
+                &mut self.cfg.ocr.salva_debug,
+                "Salva ritardometro-debug.png (calibrazione OCR)",
+            )
+            .changed()
+        {
+            self.sincronizza_ocr_condiviso();
+        }
+
+        ui.separator();
+
+        ui.label(egui::RichText::new("Trasparenza").strong());
+        let mut op_sfondo_pct = (self.cfg.opacita_sfondo * 100.0).round();
         ui.horizontal(|ui| {
-            ui.label("Slide");
-            if ui.button("-1").clicked() {
-                let s = self.slide.unwrap_or(2).saturating_sub(1).max(1);
-                self.imposta_slide(s);
-            }
-            if ui.button("+1").clicked() {
-                let s = self.slide.unwrap_or(0) + 1;
-                self.imposta_slide(s);
+            ui.label("Sfondo:");
+            if ui
+                .add(
+                    egui::Slider::new(&mut op_sfondo_pct, 0.0..=100.0)
+                        .suffix("%")
+                        .fixed_decimals(0),
+                )
+                .changed()
+            {
+                self.cfg.opacita_sfondo = (op_sfondo_pct / 100.0).clamp(0.0, 1.0);
+                ctx_root.request_repaint();
             }
         });
+
+        let mut op_tot_pct = (self.cfg.opacita * 100.0).round();
+        ui.horizontal(|ui| {
+            ui.label("Avatar e testi:");
+            if ui
+                .add(
+                    egui::Slider::new(&mut op_tot_pct, 15.0..=100.0)
+                        .suffix("%")
+                        .fixed_decimals(0),
+                )
+                .changed()
+            {
+                self.cfg.opacita = (op_tot_pct / 100.0).clamp(0.15, 1.0);
+                ctx_root.request_repaint();
+            }
+        });
+
         ui.separator();
-        if ui.button("Apri configurazione").clicked() {
+
+        if ui.button("Apri file di configurazione").clicked() {
             apri_file(&self.percorso_config);
-            ui.close();
+            self.menu_aperto = false;
         }
         ui.label(
-            egui::RichText::new("riavvia dopo aver modificato")
+            egui::RichText::new("riavvia dopo aver modificato il file .toml")
                 .small()
-                .color(GRIGIO),
+                .color(Color32::from_rgb(195, 200, 215)),
         );
+
         ui.separator();
-        if ui.button("Esci   (Esc)").clicked() {
-            ui.ctx().send_viewport_cmd(ViewportCommand::Close);
+
+        ui.horizontal_wrapped(|ui| {
+            ui.label(
+                egui::RichText::new(format!("Ritardometro v{}", env!("CARGO_PKG_VERSION")))
+                    .strong(),
+            );
+            if ui
+                .link("GitHub")
+                .on_hover_text(env!("CARGO_PKG_REPOSITORY"))
+                .clicked()
+            {
+                apri_url(env!("CARGO_PKG_REPOSITORY"));
+            }
+        });
+
+        ui.separator();
+
+        ui.horizontal(|ui| {
+            if ui.button("Chiudi menu").clicked() {
+                self.menu_aperto = false;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("Esci dal programma").clicked() {
+                    ctx_root.send_viewport_cmd_to(egui::ViewportId::ROOT, ViewportCommand::Close);
+                }
+            });
+        });
+    }
+
+    fn avvia_evidenziazione_ocr(&mut self) {
+        let centro = self
+            .ocr_condiviso
+            .lock()
+            .ok()
+            .and_then(|s| s.centro_finestra);
+        if let Some(info) = ocr::info_zona_ocr(&self.cfg.ocr, centro) {
+            self.evidenzia_ocr = Some((Instant::now(), info));
+        }
+    }
+
+    /// Mostra per ~2.2 secondi un riquadro luminoso lampeggiante esattamente sopra
+    /// la zona dello schermo (e sul monitor) in cui l'OCR legge il contatore delle slide.
+    fn mostra_evidenziazione_ocr(&mut self, ctx: &egui::Context) {
+        let Some((inizio, info)) = self.evidenzia_ocr else {
+            return;
+        };
+        let trascorso = inizio.elapsed().as_secs_f32();
+        if trascorso > 2.2 {
+            self.evidenzia_ocr = None;
+            return;
+        }
+
+        let (rx, ry, rw, rh) = info.rect_ocr;
+        let titolo_evidenzia = "Ritardometro — Zona OCR";
+        let ppp = ctx.pixels_per_point().max(1.0);
+        let builder = egui::ViewportBuilder::default()
+            .with_title(titolo_evidenzia)
+            .with_position(Pos2::new(rx as f32 / ppp, ry as f32 / ppp))
+            .with_inner_size(Vec2::new(rw as f32 / ppp, rh as f32 / ppp))
+            .with_decorations(false)
+            .with_transparent(true)
+            .with_always_on_top()
+            .with_mouse_passthrough(true)
+            .with_taskbar(false);
+
+        let id_ev = egui::ViewportId::from_hash_of("ritardometro_evidenzia_ocr");
+        let modalita = if self.cfg.ocr.monitor == 0 {
+            format!("AUTO -> MONITOR {} di {}", info.numero_monitor, info.totale_monitor)
+        } else {
+            format!("MONITOR {} di {}", info.numero_monitor, info.totale_monitor)
+        };
+
+        ctx.show_viewport_immediate(id_ev, builder, |ui, _class| {
+            #[cfg(windows)]
+            win32_drag::posiziona_finestra_per_titolo(titolo_evidenzia, rx, ry, rw, rh);
+
+            let r = ui.max_rect();
+            let p = ui.painter_at(r);
+            let onda = (trascorso * 12.0).sin() * 0.5 + 0.5;
+            let fade = ((2.2 - trascorso) / 0.4).clamp(0.0, 1.0);
+
+            p.rect_filled(
+                r.shrink(2.0),
+                CornerRadius::same(10),
+                Color32::from_black_alpha((185.0 * fade) as u8),
+            );
+            let col_bordo = if onda > 0.5 { GIALLO } else { VERDE };
+            p.rect_stroke(
+                r.shrink(3.0),
+                CornerRadius::same(10),
+                Stroke::new(4.0, col_bordo.linear_multiply(fade)),
+                egui::StrokeKind::Inside,
+            );
+
+            let c = r.center();
+            p.text(
+                Pos2::new(c.x, c.y - 10.0),
+                Align2::CENTER_CENTER,
+                &modalita,
+                FontId::proportional(20.0),
+                GIALLO.linear_multiply(fade),
+            );
+            p.text(
+                Pos2::new(c.x, c.y + 12.0),
+                Align2::CENTER_CENTER,
+                format!("Zona OCR slide ({}×{})", info.dim_monitor.0, info.dim_monitor.1),
+                FontId::proportional(13.0),
+                Color32::WHITE.linear_multiply(fade),
+            );
+        });
+        ctx.request_repaint();
+    }
+
+    fn sincronizza_ocr_condiviso(&self) {
+        if let Ok(mut s) = self.ocr_condiviso.lock() {
+            s.cfg = self.cfg.ocr.clone();
+            s.in_pausa = self.in_pausa();
+        }
+    }
+
+    fn aggiorna_centro_finestra_ocr(&self, ctx: &egui::Context) {
+        let mut centro: Option<(i32, i32)> = None;
+        #[cfg(windows)]
+        if self.hwnd_principale != 0 {
+            let mut rect = win32_drag::Rect::default();
+            if unsafe { win32_drag::GetWindowRect(self.hwnd_principale, &mut rect) } != 0 {
+                centro = Some(((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2));
+            }
+        }
+        if centro.is_none() {
+            if let Some(outer) = ctx.input(|i| i.viewport().outer_rect) {
+                let ppp = ctx.pixels_per_point();
+                let c = outer.center();
+                centro = Some(((c.x * ppp) as i32, (c.y * ppp) as i32));
+            }
+        }
+        if let Ok(mut s) = self.ocr_condiviso.lock() {
+            if let Some(c) = centro {
+                s.centro_finestra = Some(c);
+            }
+            s.in_pausa = self.in_pausa();
         }
     }
 
@@ -295,6 +942,181 @@ impl Ritardometro {
             self.cfg.panico_secondi,
         )
     }
+
+    /// Cattura l'HWND della finestra principale e rimuove il bordo nativo di 1px di Windows 11 / winit.
+    #[cfg(windows)]
+    fn aggiorna_hwnd_e_bordo_win32(&mut self) {
+        let hwnd_attivo = unsafe { win32_drag::GetActiveWindow() };
+        if hwnd_attivo != 0 && !self.menu_aperto {
+            self.hwnd_principale = hwnd_attivo;
+        }
+        if self.hwnd_principale != 0 {
+            win32_drag::rimuovi_bordo_finestra(self.hwnd_principale);
+            self.bordo_rimosso = true;
+        }
+    }
+
+    /// Su Windows gestisce il ridimensionamento direttamente in coordinate fisiche dello schermo
+    /// ancorando il lato/angolo opposto, così tirando l'angolo in alto a sinistra (`NorthWest`)
+    /// l'angolo in basso a destra rimane fisso invece di allargarsi verso destra/basso.
+    #[cfg(windows)]
+    fn aggiorna_resize_win32(
+        &mut self,
+        ctx: &egui::Context,
+        avvia_dir: Option<egui::ResizeDirection>,
+    ) {
+        if let Some(dir) = avvia_dir {
+            if self.resize_win32.is_none() && self.hwnd_principale != 0 {
+                let mut cur = win32_drag::Point::default();
+                let mut rect = win32_drag::Rect::default();
+                unsafe {
+                    if win32_drag::GetCursorPos(&mut cur) != 0
+                        && win32_drag::GetWindowRect(self.hwnd_principale, &mut rect) != 0
+                    {
+                        self.resize_win32 = Some(ResizeWin32 {
+                            hwnd: self.hwnd_principale,
+                            dir,
+                            start_cur: cur,
+                            start_rect: rect,
+                            scala0: self.cfg.scala,
+                        });
+                    }
+                }
+            }
+        }
+
+        if let Some(rw) = self.resize_win32 {
+            let giu = unsafe {
+                (win32_drag::GetAsyncKeyState(win32_drag::VK_LBUTTON) as u16 & 0x8000) != 0
+            };
+            if !giu {
+                self.resize_win32 = None;
+                self.resize_attivo = None;
+            } else {
+                let mut cur = win32_drag::Point::default();
+                unsafe {
+                    if win32_drag::GetCursorPos(&mut cur) != 0 {
+                        let w0 = (rw.start_rect.right - rw.start_rect.left).max(1) as f32;
+                        let h0 = (rw.start_rect.bottom - rw.start_rect.top).max(1) as f32;
+                        let base_w = w0 / rw.scala0;
+                        let base_h = h0 / rw.scala0;
+                        let dx = (cur.x - rw.start_cur.x) as f32 / base_w;
+                        let dy = (cur.y - rw.start_cur.y) as f32 / base_h;
+
+                        use egui::ResizeDirection::*;
+                        let nuova_scala = match rw.dir {
+                            East => rw.scala0 + dx,
+                            South => rw.scala0 + dy,
+                            SouthEast => rw.scala0 + (dx + dy) * 0.5,
+                            West => rw.scala0 - dx,
+                            North => rw.scala0 - dy,
+                            NorthWest => rw.scala0 - (dx + dy) * 0.5,
+                            NorthEast => rw.scala0 + (dx - dy) * 0.5,
+                            SouthWest => rw.scala0 + (dy - dx) * 0.5,
+                        }
+                        .clamp(0.5, 3.0);
+
+                        let new_w = (base_w * nuova_scala).round() as i32;
+                        let new_h = (base_h * nuova_scala).round() as i32;
+
+                        let new_x = match rw.dir {
+                            West | NorthWest | SouthWest => rw.start_rect.right - new_w,
+                            _ => rw.start_rect.left,
+                        };
+                        let new_y = match rw.dir {
+                            North | NorthWest | NorthEast => rw.start_rect.bottom - new_h,
+                            _ => rw.start_rect.top,
+                        };
+
+                        self.cfg.scala = nuova_scala;
+                        win32_drag::SetWindowPos(
+                            rw.hwnd,
+                            0,
+                            new_x,
+                            new_y,
+                            new_w,
+                            new_h,
+                            win32_drag::SWP_NOZORDER | win32_drag::SWP_NOACTIVATE,
+                        );
+                    }
+                }
+                ctx.request_repaint();
+            }
+        }
+    }
+
+    /// Su Windows gestisce lo spostamento della finestra direttamente tramite coordinate
+    /// fisiche del cursore e del centro finestra (`SetWindowPos`), evitando il bug di `winit`
+    /// che durante `WM_DPICHANGED` riporta la finestra sul primo monitor.
+    #[cfg(windows)]
+    fn aggiorna_trascinamento_win32(&mut self, ctx: &egui::Context, avvia_drag: bool) {
+        self.trascinato_appena = false;
+
+        if avvia_drag && self.trascinamento.is_none() && self.hwnd_principale != 0 {
+            let hwnd = self.hwnd_principale;
+            let mut cur = win32_drag::Point::default();
+            let mut rect = win32_drag::Rect::default();
+            unsafe {
+                if win32_drag::GetCursorPos(&mut cur) != 0
+                    && win32_drag::GetWindowRect(hwnd, &mut rect) != 0
+                {
+                    let cx = (rect.left + rect.right) / 2;
+                    let cy = (rect.top + rect.bottom) / 2;
+                    self.trascinamento = Some(TrascinamentoWin32 {
+                        hwnd,
+                        offset_cx: cur.x - cx,
+                        offset_cy: cur.y - cy,
+                        start_x: cur.x,
+                        start_y: cur.y,
+                        mosso: false,
+                    });
+                }
+            }
+        }
+
+        if let Some(mut tr) = self.trascinamento {
+            let giu = unsafe {
+                (win32_drag::GetAsyncKeyState(win32_drag::VK_LBUTTON) as u16 & 0x8000) != 0
+            };
+            if !giu {
+                self.trascinato_appena = tr.mosso;
+                self.trascinamento = None;
+            } else {
+                let mut cur = win32_drag::Point::default();
+                let mut rect = win32_drag::Rect::default();
+                unsafe {
+                    if win32_drag::GetCursorPos(&mut cur) != 0
+                        && win32_drag::GetWindowRect(tr.hwnd, &mut rect) != 0
+                    {
+                        if (cur.x - tr.start_x).abs() > 3 || (cur.y - tr.start_y).abs() > 3 {
+                            tr.mosso = true;
+                        }
+                        if tr.mosso {
+                            let w = rect.right - rect.left;
+                            let h = rect.bottom - rect.top;
+                            let nuovo_cx = cur.x - tr.offset_cx;
+                            let nuovo_cy = cur.y - tr.offset_cy;
+                            let x = nuovo_cx - w / 2;
+                            let y = nuovo_cy - h / 2;
+                            win32_drag::SetWindowPos(
+                                tr.hwnd,
+                                0,
+                                x,
+                                y,
+                                0,
+                                0,
+                                win32_drag::SWP_NOSIZE
+                                    | win32_drag::SWP_NOZORDER
+                                    | win32_drag::SWP_NOACTIVATE,
+                            );
+                        }
+                    }
+                }
+                self.trascinamento = Some(tr);
+                ctx.request_repaint();
+            }
+        }
+    }
 }
 
 /// Le fasi del talk, per decidere cosa mostrare.
@@ -302,6 +1124,7 @@ enum Fase {
     Attesa,
     Talk,
     Domande { restanti: f32 },
+    Concluso,
     Sforato { oltre: f32 },
 }
 
@@ -312,12 +1135,20 @@ impl eframe::App for Ritardometro {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        #[cfg(windows)]
+        self.aggiorna_hwnd_e_bordo_win32();
         self.posiziona(&ctx);
+        self.aggiorna_centro_finestra_ocr(&ctx);
         self.simula();
         self.ricevi_ocr();
         self.tastiera(&ctx);
 
-        let s = self.cfg.scala;
+        let area = ui.max_rect();
+        // La scala di disegno si adatta sempre alla dimensione attuale della finestra.
+        let s = (area.width() / LARGHEZZA)
+            .min(area.height() / ALTEZZA)
+            .clamp(0.5, 3.0);
+
         let t = self.nascita.elapsed().as_secs_f32();
         let durata = self.cfg.durata_secondi();
         let domande = self.cfg.domande_minuti * 60.0;
@@ -325,6 +1156,12 @@ impl eframe::App for Ritardometro {
         self.bandierine.aggiorna(trascorsi, t);
         let andatura = self.andatura(trascorsi);
         let totale = self.totale();
+
+        // Sei arrivato all'ultima slide del talk?
+        let ultima_slide = matches!(
+            (self.slide, totale),
+            (Some(sl), Some(tot)) if tot >= 2 && sl >= tot
+        );
 
         let fase = if self.crono.mai_avviato() {
             Fase::Attesa
@@ -338,24 +1175,124 @@ impl eframe::App for Ritardometro {
                 Fase::Domande {
                     restanti: domande - oltre,
                 }
+            } else if !indietro && domande <= 0.0 && oltre < 30.0 {
+                Fase::Concluso
             } else {
                 Fase::Sforato { oltre }
             }
         };
 
-        // ---------------- interazione ----------------
-        let area = ui.max_rect();
+        // ---------------- interazione: spostamento vs ridimensionamento ----------------
+        let (hover_pos, interact_pos, premuto, giu) = ctx.input(|i| {
+            (
+                i.pointer.hover_pos(),
+                i.pointer.interact_pos(),
+                i.pointer.primary_pressed(),
+                i.pointer.primary_down(),
+            )
+        });
+
+        let mut avvia_drag_win32 = false;
+        let mut avvia_resize_dir = None;
+        if !giu {
+            self.resize_attivo = None;
+        } else if premuto {
+            if let Some(pos) = interact_pos.or(hover_pos) {
+                if let Some(dir) = zona_resize(area, pos, s) {
+                    self.resize_attivo = Some((dir, pos, self.cfg.scala));
+                    avvia_resize_dir = Some(dir);
+                } else if area.contains(pos) {
+                    avvia_drag_win32 = true;
+                }
+            }
+        }
+
+        let dir_hover = hover_pos.and_then(|p| zona_resize(area, p, s));
+        #[cfg(windows)]
+        let dir_attivo = self
+            .resize_win32
+            .map(|r| r.dir)
+            .or_else(|| self.resize_attivo.map(|(d, _, _)| d));
+        #[cfg(not(windows))]
+        let dir_attivo = self.resize_attivo.map(|(d, _, _)| d);
+
+        if let Some(dir) = dir_attivo {
+            ctx.set_cursor_icon(cursore_resize(dir));
+        } else if let Some(dir) = dir_hover {
+            ctx.set_cursor_icon(cursore_resize(dir));
+        }
+
         let risposta = ui.interact(area, Id::unique("overlay"), Sense::click_and_drag());
-        if risposta.drag_started_by(egui::PointerButton::Primary) {
+
+        #[cfg(windows)]
+        {
+            self.aggiorna_resize_win32(&ctx, avvia_resize_dir);
+            if self.resize_win32.is_none() {
+                self.aggiorna_trascinamento_win32(&ctx, avvia_drag_win32);
+            }
+        }
+
+        #[cfg(not(windows))]
+        let _ = (avvia_drag_win32, avvia_resize_dir);
+
+        #[cfg(not(windows))]
+        if let Some((dir, origine, scala0)) = self.resize_attivo {
+            if let Some(pos) = interact_pos {
+                use egui::ResizeDirection::*;
+                let dx = (pos.x - origine.x) / LARGHEZZA;
+                let dy = (pos.y - origine.y) / ALTEZZA;
+                let nuova_scala = match dir {
+                    East => scala0 + dx,
+                    South => scala0 + dy,
+                    SouthEast => scala0 + (dx + dy) * 0.5,
+                    West => scala0 - dx,
+                    North => scala0 - dy,
+                    NorthWest => scala0 - (dx + dy) * 0.5,
+                    NorthEast => scala0 + (dx - dy) * 0.5,
+                    SouthWest => scala0 + (dy - dx) * 0.5,
+                };
+                self.cambia_scala(&ctx, nuova_scala);
+            }
+        } else if risposta.drag_started_by(egui::PointerButton::Primary) {
             ctx.send_viewport_cmd(ViewportCommand::StartDrag);
         }
-        if risposta.clicked() {
-            self.crono.alterna();
+
+        #[cfg(windows)]
+        let appena_trascinato = self.trascinato_appena;
+        #[cfg(not(windows))]
+        let appena_trascinato = false;
+
+        if risposta.clicked()
+            && !appena_trascinato
+            && dir_attivo.is_none()
+            && dir_hover.is_none()
+        {
+            self.alterna_pausa();
         }
-        risposta.context_menu(|ui| self.menu(ui));
+
+        // Click destro: apre/chiude la finestra di configurazione esterna
+        if risposta.secondary_clicked() {
+            self.menu_aperto = !self.menu_aperto;
+            if self.menu_aperto {
+                self.num_monitor = ocr::numero_monitor();
+                if let Some(outer) = ctx.input(|i| i.viewport().outer_rect) {
+                    let x = if outer.left() > 395.0 {
+                        outer.left() - 390.0
+                    } else {
+                        outer.right() + 10.0
+                    };
+                    let y = outer.top().max(20.0);
+                    self.menu_pos = Some(Pos2::new(x, y));
+                }
+            }
+        }
+        self.mostra_finestra_menu(&ctx);
+        self.mostra_evidenziazione_ocr(&ctx);
 
         // ---------------- stato dell'avatar ----------------
-        let (mut stato, colore_scarto) = stato_avatar(&self.cfg, &fase, andatura.as_ref());
+        let (mut stato, colore_scarto) =
+            stato_avatar(&self.cfg, &fase, andatura.as_ref(), ultima_slide);
+        stato.opacita = self.cfg.opacita;
         if let Some((testo, p)) = self.bandierine.corrente() {
             if stato.bandiera.is_none() {
                 stato.bandiera = Some(Bandiera {
@@ -372,13 +1309,37 @@ impl eframe::App for Ritardometro {
         stato.alza_rosso = ctx.animate_value_with_time(Id::unique("rosso"), stato.alza_rosso, anim);
 
         // ---------------- disegno ----------------
+        let op = self.cfg.opacita.clamp(0.15, 1.0);
+        let applica_op = |c: Color32| -> Color32 {
+            if op >= 0.999 {
+                c
+            } else {
+                c.linear_multiply(op)
+            }
+        };
+
         let painter = ui.painter_at(area);
         let fondo = area.shrink(2.0 * s);
         painter.rect_filled(
             fondo,
-            CornerRadius::same((18.0 * s) as u8),
-            Color32::from_black_alpha((self.cfg.opacita_sfondo * 255.0) as u8),
+            CornerRadius::same((18.0 * s).clamp(4.0, 255.0) as u8),
+            Color32::from_black_alpha((self.cfg.opacita_sfondo * op * 255.0) as u8),
         );
+
+        // Maniglia di ridimensionamento nell'angolo in basso a destra
+        let in_resize = dir_attivo.is_some() || dir_hover.is_some();
+        if risposta.hovered() || in_resize {
+            let alpha = if in_resize { 220 } else { 110 };
+            let c_grip = applica_op(Color32::from_white_alpha(alpha));
+            let bx = fondo.max.x - 6.0 * s;
+            let by = fondo.max.y - 6.0 * s;
+            for d in [5.0_f32, 9.5, 14.0] {
+                painter.line_segment(
+                    [Pos2::new(bx - d * s, by), Pos2::new(bx, by - d * s)],
+                    Stroke::new((1.6 * s).max(1.2), c_grip),
+                );
+            }
+        }
 
         let lato_avatar = 196.0 * s;
         let rect_avatar = Rect::from_min_size(
@@ -398,6 +1359,7 @@ impl eframe::App for Ritardometro {
             Fase::Attesa => (pacing::mm_ss(durata), Color32::WHITE),
             Fase::Talk => (pacing::mm_ss(durata - trascorsi), Color32::WHITE),
             Fase::Domande { restanti } => (pacing::mm_ss(*restanti), GIALLO),
+            Fase::Concluso => ("00:00".to_string(), VERDE),
             Fase::Sforato { oltre } => (format!("+{}", pacing::mm_ss(*oltre)), ROSSO),
         };
         let lampeggia =
@@ -412,21 +1374,28 @@ impl eframe::App for Ritardometro {
             Align2::CENTER_TOP,
             tempo,
             FontId::monospace(40.0 * s),
-            colore_tempo,
+            applica_op(colore_tempo),
         );
         y += 46.0 * s;
 
         // riga di stato
         let riga = match (&fase, &andatura) {
-            (Fase::Attesa, _) => {
-                if self.cfg.avvio_automatico && self.ocr_rx.is_some() {
+            (Fase::Attesa, _) => match (self.slide, totale) {
+                (Some(sl), Some(tot)) => format!("slide {sl}/{tot} — clic o cambia slide"),
+                (Some(sl), None) => format!("slide {sl} — clic o cambia slide"),
+                _ if self.cfg.avvio_automatico && self.ocr_rx.is_some() => {
                     "clic o cambia slide per partire".to_string()
-                } else {
-                    "clic per partire".to_string()
                 }
-            }
-            (Fase::Domande { .. }, _) => "tempo delle domande".to_string(),
+                _ => "clic per partire".to_string(),
+            },
+            (Fase::Domande { .. }, _) => "applausi! tempo delle domande".to_string(),
+            (Fase::Concluso, _) => "talk concluso! applausi!".to_string(),
             (Fase::Sforato { .. }, _) => "tempo scaduto!".to_string(),
+            (Fase::Talk, _) if ultima_slide => format!(
+                "slide {}/{}  fine talk! applausi!",
+                self.slide.unwrap_or(0),
+                totale.unwrap_or(0),
+            ),
             (Fase::Talk, Some(a)) => {
                 let giudizio = match a.ritmo {
                     Ritmo::InLinea => "in linea",
@@ -452,7 +1421,7 @@ impl eframe::App for Ritardometro {
             Align2::CENTER_TOP,
             riga,
             FontId::proportional(14.0 * s),
-            colore_scarto,
+            applica_op(colore_scarto),
         );
         y += 21.0 * s;
 
@@ -464,7 +1433,7 @@ impl eframe::App for Ritardometro {
         painter.rect_filled(
             barra,
             CornerRadius::same((3.0 * s) as u8),
-            Color32::from_white_alpha(40),
+            applica_op(Color32::from_white_alpha(40)),
         );
         let p_tempo = (trascorsi / durata).clamp(0.0, 1.0);
         let mut pieno = barra;
@@ -472,7 +1441,7 @@ impl eframe::App for Ritardometro {
         painter.rect_filled(
             pieno,
             CornerRadius::same((3.0 * s) as u8),
-            Color32::from_white_alpha(170),
+            applica_op(Color32::from_white_alpha(170)),
         );
         if let (Some(sl), Some(tot)) = (self.slide, totale) {
             if tot > 0 {
@@ -483,7 +1452,7 @@ impl eframe::App for Ritardometro {
                         Pos2::new(x, barra.min.y - 4.0 * s),
                         Pos2::new(x, barra.max.y + 4.0 * s),
                     ],
-                    Stroke::new(3.0 * s, colore_scarto),
+                    Stroke::new(3.0 * s, applica_op(colore_scarto)),
                 );
             }
         }
@@ -502,7 +1471,7 @@ impl eframe::App for Ritardometro {
             Align2::CENTER_TOP,
             nota,
             FontId::proportional(10.5 * s),
-            GRIGIO,
+            applica_op(GRIGIO),
         );
 
         // L'avviso sparisce dopo il primo avvio.
@@ -515,7 +1484,12 @@ impl eframe::App for Ritardometro {
 }
 
 /// Traduce il ritmo del talk in espressione e posizione delle braccia.
-fn stato_avatar(cfg: &Config, fase: &Fase, andatura: Option<&Andatura>) -> (StatoAvatar, Color32) {
+fn stato_avatar(
+    cfg: &Config,
+    fase: &Fase,
+    andatura: Option<&Andatura>,
+    ultima_slide: bool,
+) -> (StatoAvatar, Color32) {
     let tol = cfg.tolleranza_secondi;
     let pan = cfg.panico_secondi;
     let frazione = |x: f32| ((x - tol) / (pan - tol).max(1.0)).clamp(0.0, 1.0);
@@ -524,10 +1498,12 @@ fn stato_avatar(cfg: &Config, fase: &Fase, andatura: Option<&Andatura>) -> (Stat
         Fase::Attesa => (StatoAvatar::default(), GRIGIO),
         Fase::Domande { .. } => (
             StatoAvatar {
-                umore: 0.9,
-                alza_verde: 0.6,
+                umore: 1.0,
+                alza_verde: 0.8,
                 alza_rosso: 0.0,
                 sudore: false,
+                applauso: true,
+                opacita: 1.0,
                 bandiera: Some(Bandiera {
                     testo: "DOMANDE?".into(),
                     colore: GIALLO,
@@ -536,12 +1512,30 @@ fn stato_avatar(cfg: &Config, fase: &Fase, andatura: Option<&Andatura>) -> (Stat
             },
             GIALLO,
         ),
+        Fase::Concluso => (
+            StatoAvatar {
+                umore: 1.0,
+                alza_verde: 1.0,
+                alza_rosso: 0.0,
+                sudore: false,
+                applauso: true,
+                opacita: 1.0,
+                bandiera: Some(Bandiera {
+                    testo: "BRAVO!".into(),
+                    colore: VERDE,
+                    alzata: 1.0,
+                }),
+            },
+            VERDE,
+        ),
         Fase::Sforato { .. } => (
             StatoAvatar {
                 umore: -1.0,
                 alza_verde: 0.0,
                 alza_rosso: 1.0,
                 sudore: true,
+                applauso: false,
+                opacita: 1.0,
                 bandiera: Some(Bandiera {
                     testo: "STOP!".into(),
                     colore: ROSSO,
@@ -549,6 +1543,22 @@ fn stato_avatar(cfg: &Config, fase: &Fase, andatura: Option<&Andatura>) -> (Stat
                 }),
             },
             ROSSO,
+        ),
+        Fase::Talk if ultima_slide => (
+            StatoAvatar {
+                umore: 1.0,
+                alza_verde: 1.0,
+                alza_rosso: 0.0,
+                sudore: false,
+                applauso: true,
+                opacita: 1.0,
+                bandiera: Some(Bandiera {
+                    testo: "BRAVO!".into(),
+                    colore: VERDE,
+                    alzata: 1.0,
+                }),
+            },
+            VERDE,
         ),
         Fase::Talk => match andatura {
             None => (
@@ -588,6 +1598,8 @@ fn stato_avatar(cfg: &Config, fase: &Fase, andatura: Option<&Andatura>) -> (Stat
                             alza_verde: 0.05,
                             alza_rosso: 0.45 + 0.55 * f,
                             sudore: a.ritmo == Ritmo::Panico,
+                            applauso: false,
+                            opacita: 1.0,
                             bandiera: None,
                         },
                         if a.ritmo == Ritmo::Panico {
@@ -620,3 +1632,90 @@ fn apri_file(percorso: &std::path::Path) {
     #[cfg(all(unix, not(target_os = "macos")))]
     let _ = std::process::Command::new("xdg-open").arg(percorso).spawn();
 }
+
+/// Apre un indirizzo web nel browser predefinito.
+fn apri_url(url: &str) {
+    // explorer.exe apre l'URL nel browser predefinito senza far lampeggiare una console
+    #[cfg(windows)]
+    let _ = std::process::Command::new("explorer").arg(url).spawn();
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg(url).spawn();
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let _ = std::process::Command::new("xdg-open").arg(url).spawn();
+}
+
+/// Rileva se il puntatore si trova sui bordi o sulla maniglia in basso a destra per il ridimensionamento.
+fn zona_resize(area: Rect, pos: Pos2, s: f32) -> Option<egui::ResizeDirection> {
+    if !area.contains(pos) {
+        return None;
+    }
+    let grip = (38.0 * s).clamp(28.0, 64.0);
+    if pos.x >= area.max.x - grip && pos.y >= area.max.y - grip {
+        return Some(egui::ResizeDirection::SouthEast);
+    }
+
+    let bordo = (14.0 * s).clamp(12.0, 24.0);
+    let sx = pos.x <= area.min.x + bordo;
+    let dx = pos.x >= area.max.x - bordo;
+    let su = pos.y <= area.min.y + bordo;
+    let giu = pos.y >= area.max.y - bordo;
+
+    use egui::ResizeDirection::*;
+    match (sx, dx, su, giu) {
+        (true, _, true, _) => Some(NorthWest),
+        (_, true, true, _) => Some(NorthEast),
+        (true, _, _, true) => Some(SouthWest),
+        (_, true, _, true) => Some(SouthEast),
+        (true, _, _, _) => Some(West),
+        (_, true, _, _) => Some(East),
+        (_, _, true, _) => Some(North),
+        (_, _, _, true) => Some(South),
+        _ => None,
+    }
+}
+
+fn cursore_resize(dir: egui::ResizeDirection) -> egui::CursorIcon {
+    use egui::ResizeDirection::*;
+    match dir {
+        NorthWest | SouthEast => egui::CursorIcon::ResizeNwSe,
+        NorthEast | SouthWest => egui::CursorIcon::ResizeNeSw,
+        East | West => egui::CursorIcon::ResizeHorizontal,
+        North | South => egui::CursorIcon::ResizeVertical,
+    }
+}
+
+/// Tema scuro ad alto contrasto per la finestra di configurazione, indipendente
+/// dal tema chiaro/scuro di sistema di Windows.
+fn tema_scuro_contrasto() -> egui::Visuals {
+    let mut v = egui::Visuals::dark();
+    let bianco_testo = Color32::from_rgb(245, 247, 252);
+    v.override_text_color = Some(bianco_testo);
+    v.panel_fill = Color32::from_rgb(26, 28, 34);
+    v.window_fill = Color32::from_rgb(26, 28, 34);
+
+    v.widgets.noninteractive.bg_fill = Color32::from_rgb(38, 42, 52);
+    v.widgets.noninteractive.weak_bg_fill = Color32::from_rgb(38, 42, 52);
+    v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(72, 78, 94));
+    v.widgets.noninteractive.fg_stroke = Stroke::new(1.0, bianco_testo);
+
+    v.widgets.inactive.bg_fill = Color32::from_rgb(56, 62, 78);
+    v.widgets.inactive.weak_bg_fill = Color32::from_rgb(56, 62, 78);
+    v.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(95, 104, 128));
+    v.widgets.inactive.fg_stroke = Stroke::new(1.2, Color32::WHITE);
+
+    v.widgets.hovered.bg_fill = Color32::from_rgb(78, 88, 112);
+    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(78, 88, 112);
+    v.widgets.hovered.bg_stroke = Stroke::new(1.2, Color32::from_rgb(140, 155, 190));
+    v.widgets.hovered.fg_stroke = Stroke::new(1.5, Color32::WHITE);
+
+    v.widgets.active.bg_fill = Color32::from_rgb(98, 112, 145);
+    v.widgets.active.weak_bg_fill = Color32::from_rgb(98, 112, 145);
+    v.widgets.active.bg_stroke = Stroke::new(1.5, Color32::WHITE);
+    v.widgets.active.fg_stroke = Stroke::new(1.5, Color32::WHITE);
+
+    v.selection.bg_fill = Color32::from_rgb(45, 125, 220);
+    v.selection.stroke = Stroke::new(1.2, Color32::WHITE);
+    v
+}
+
+

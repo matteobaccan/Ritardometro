@@ -28,6 +28,9 @@ scala = 1.0
 # Opacità del riquadro dietro all'avatar (0.0 = invisibile, 1.0 = pieno)
 opacita_sfondo = 0.70
 
+# Opacità complessiva dell'overlay (avatar e testi, da 0.15 a 1.0)
+opacita = 1.0
+
 # Dove appare l'overlay: "alto-sinistra", "alto-destra", "basso-sinistra", "basso-destra"
 # (puoi comunque trascinarlo dove vuoi)
 posizione = "alto-destra"
@@ -39,7 +42,7 @@ margine = 24
 # Legge il numero di slide dallo schermo. false = solo timer
 attivo = true
 
-# Monitor da leggere: 0 = principale, 1 = primo monitor, 2 = secondo, ...
+# Monitor da leggere: 0 = automatico (lo schermo su cui si trova il Ritardometro), 1 = primo monitor, 2 = secondo, ...
 monitor = 0
 
 # Rettangolo dove si trova il contatore delle slide, in frazioni dello schermo
@@ -51,7 +54,7 @@ larghezza = 0.15
 altezza = 0.12
 
 # Ogni quanti millisecondi leggere lo schermo
-intervallo_ms = 500
+intervallo_ms = 250
 
 # Ingrandimento dell'immagine prima dell'OCR (i numeri piccoli si leggono meglio)
 ingrandimento = 3

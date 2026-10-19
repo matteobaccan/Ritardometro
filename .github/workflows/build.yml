@@ -3,16 +3,19 @@ name: Build
 on:
   push:
     branches: [main]
-    tags: ["v*"]
   pull_request:
   workflow_dispatch:
 
-permissions:
-  contents: write
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-  windows:
-    runs-on: windows-latest
+  ci:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-22.04, macos-14]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -22,32 +25,27 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      - name: Dipendenze Linux (X11/Wayland/OpenGL)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxcursor-dev libxrandr-dev libxi-dev \
+            libxkbcommon-dev libwayland-dev libgl1-mesa-dev
+
       - name: Test
         run: cargo test
 
       - name: Clippy
+        if: runner.os == 'Windows'
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Build release
         run: cargo build --release
 
-      - name: Prepara pacchetto
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item target/release/ritardometro.exe dist/
-          Copy-Item ritardometro.toml dist/
-          Copy-Item README.md dist/
-          Compress-Archive -Path dist/* -DestinationPath ritardometro-windows.zip -Force
-
       - uses: actions/upload-artifact@v4
         with:
-          name: ritardometro-windows
-          path: dist/
-
-      - name: Pubblica release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ritardometro-windows.zip
-          generate_release_notes: true
+          name: ritardometro-${{ runner.os }}
+          path: |
+            target/release/ritardometro
+            target/release/ritardometro.exe
+          if-no-files-found: ignore

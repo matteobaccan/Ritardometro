@@ -21,6 +21,7 @@ pub struct Config {
     pub panico_secondi: f32,
     pub scala: f32,
     pub opacita_sfondo: f32,
+    pub opacita: f32,
     pub posizione: Posizione,
     pub margine: f32,
     pub ocr: OcrConfig,
@@ -69,6 +70,7 @@ impl Default for Config {
             panico_secondi: 180.0,
             scala: 1.0,
             opacita_sfondo: 0.70,
+            opacita: 1.0,
             posizione: Posizione::AltoDestra,
             margine: 24.0,
             ocr: OcrConfig::default(),
@@ -97,7 +99,7 @@ impl Default for OcrConfig {
             y: 0.88,
             larghezza: 0.15,
             altezza: 0.12,
-            intervallo_ms: 500,
+            intervallo_ms: 250,
             ingrandimento: 3,
             salva_debug: false,
         }
@@ -117,6 +119,7 @@ impl Config {
         self.panico_secondi = self.panico_secondi.max(self.tolleranza_secondi + 1.0);
         self.scala = self.scala.clamp(0.5, 3.0);
         self.opacita_sfondo = self.opacita_sfondo.clamp(0.0, 1.0);
+        self.opacita = self.opacita.clamp(0.15, 1.0);
         let o = &mut self.ocr;
         o.x = o.x.clamp(0.0, 0.99);
         o.y = o.y.clamp(0.0, 0.99);
