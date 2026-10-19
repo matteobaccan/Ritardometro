@@ -42,7 +42,7 @@ jobs:
       - name: Build release
         run: cargo build --release
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ritardometro-${{ runner.os }}
           path: |
