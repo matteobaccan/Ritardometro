@@ -43,7 +43,7 @@ fn ciclo(
         Ok(m) => m,
         Err(e) => {
             let _ = tx.send(Messaggio::Errore(format!(
-                "OCR di Windows non disponibile ({e}). Installa una lingua con il riconoscimento ottico in Impostazioni > Lingua"
+                "Windows OCR not available ({e}). Please install a language with OCR in Settings > Time & Language > Language"
             )));
             ctx.request_repaint();
             return;
@@ -145,20 +145,20 @@ fn scegli_monitor(indice: usize, centro_finestra: Option<(i32, i32)>) -> Result<
                 return Ok(m);
             }
         }
-        let monitor = Monitor::all().map_err(|e| format!("Monitor non trovati: {e}"))?;
+        let monitor = Monitor::all().map_err(|e| format!("Monitors not found: {e}"))?;
         monitor
             .iter()
             .find(|m| m.is_primary().unwrap_or(false))
             .or_else(|| monitor.first())
             .cloned()
-            .ok_or_else(|| "Nessun monitor trovato".into())
+            .ok_or_else(|| "No monitor found".into())
     } else {
-        let monitor = Monitor::all().map_err(|e| format!("Monitor non trovati: {e}"))?;
+        let monitor = Monitor::all().map_err(|e| format!("Monitors not found: {e}"))?;
         let n = monitor.len();
         monitor
             .into_iter()
             .nth(indice - 1)
-            .ok_or_else(|| format!("Monitor {indice} non esiste (ce ne sono {n})"))
+            .ok_or_else(|| format!("Monitor {indice} does not exist ({n} found)"))
     }
 }
 
@@ -218,7 +218,7 @@ fn cattura(
     let rw = ((cfg.larghezza * w as f32) as u32).clamp(1, w - x);
     let rh = ((cfg.altezza * h as f32) as u32).clamp(1, h - y);
     m.capture_region(x, y, rw, rh)
-        .map_err(|e| format!("Cattura schermo fallita: {e}"))
+        .map_err(|e| format!("Screen capture failed: {e}"))
 }
 
 /// Scala di grigi + normalizzazione del contrasto + ingrandimento:
@@ -298,7 +298,7 @@ fn riconosci(motore: &OcrEngine, img: &GrayImage) -> Result<String, String> {
         let risultato = motore.RecognizeAsync(&bitmap)?.join()?;
         Ok(risultato.Text()?.to_string_lossy())
     };
-    ocr().map_err(|e| format!("OCR fallito: {e}"))
+    ocr().map_err(|e| format!("OCR failed: {e}"))
 }
 
 #[cfg(test)]

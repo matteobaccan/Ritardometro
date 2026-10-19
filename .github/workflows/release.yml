@@ -1,14 +1,14 @@
 name: Release
 
-# Si attiva creando e pushando un tag di versione, es:
-#   git tag v0.2.0 && git push origin v0.2.0
+# Triggered by pushing a version tag, e.g.:
+#   git tag v1.0.0 && git push origin v1.0.0
 on:
   push:
     tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: "Tag esistente da (ri)pubblicare, es. v0.2.0"
+        description: "Existing tag to (re)publish, e.g. v1.0.0"
         required: true
 
 permissions:
@@ -19,22 +19,22 @@ env:
   TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
-  verifica-versione:
+  verify-version:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
           ref: ${{ env.TAG }}
-      - name: Il tag corrisponde a Cargo.toml?
+      - name: Does tag match Cargo.toml?
         run: |
           versione=$(grep -m1 '^version' Cargo.toml | sed -E 's/version *= *"(.*)"/\1/')
           if [ "v$versione" != "$TAG" ]; then
-            echo "::error::Il tag $TAG non corrisponde alla versione in Cargo.toml (v$versione)"
+            echo "::error::Tag $TAG does not match version in Cargo.toml (v$versione)"
             exit 1
           fi
 
   build:
-    needs: verifica-versione
+    needs: verify-version
     strategy:
       fail-fast: false
       matrix:
@@ -69,7 +69,7 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Dipendenze Linux (X11/Wayland/OpenGL)
+      - name: Linux dependencies (X11/Wayland/OpenGL)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
@@ -82,7 +82,7 @@ jobs:
       - name: Build release
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Pacchetto (Windows)
+      - name: Package (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
@@ -93,7 +93,7 @@ jobs:
           Compress-Archive -Path $dir -DestinationPath "$dir.zip" -Force
           "ARCHIVIO=$dir.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
-      - name: Pacchetto (Linux/macOS)
+      - name: Package (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
           dir="ritardometro-$TAG-${{ matrix.nome }}"
@@ -109,7 +109,7 @@ jobs:
           name: ${{ matrix.nome }}
           path: ${{ env.ARCHIVIO }}
 
-  pubblica:
+  publish:
     needs: build
     runs-on: ubuntu-latest
     steps:
@@ -128,16 +128,16 @@ jobs:
           files: dist/*
           generate_release_notes: true
           body: |
-            ## Download
-            | Sistema | File |
+            ## Downloads
+            | Platform | File |
             |---|---|
             | Windows 10/11 (x64) | `ritardometro-${{ env.TAG }}-windows-x64.zip` |
             | Linux (x64) | `ritardometro-${{ env.TAG }}-linux-x64.tar.gz` |
             | macOS Apple Silicon (M1/M2/M3…) | `ritardometro-${{ env.TAG }}-macos-arm64.tar.gz` |
             | macOS Intel | `ritardometro-${{ env.TAG }}-macos-x64.tar.gz` |
 
-            > La lettura automatica della slide (OCR) è disponibile solo su Windows;
-            > su Linux e macOS il Ritardometro funziona come timer (slide con frecce ← →).
+            > Automatic slide detection via screen OCR is supported on Windows;
+            > on Linux and macOS, Ritardometro operates as a full pacing timer (manual slide navigation via ← → arrow keys).
             >
-            > macOS: il binario non è firmato. Al primo avvio usa tasto destro → Apri,
-            > oppure `xattr -d com.apple.quarantine ./ritardometro`.
+            > macOS: the binary is unsigned. On first run, right-click → Open,
+            > or run `xattr -d com.apple.quarantine ./ritardometro`.

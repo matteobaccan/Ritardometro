@@ -35,29 +35,29 @@ fn argomenti() -> Result<Argomenti, String> {
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
         match arg.as_str() {
-            "-m" | "--minuti" => {
-                let v = it.next().ok_or("manca il valore dopo --minuti")?;
+            "-m" | "--minuti" | "--minutes" => {
+                let v = it.next().ok_or("missing value after --minutes")?;
                 a.minuti = Some(
                     v.replace(',', ".")
                         .parse()
-                        .map_err(|_| format!("minuti non validi: {v}"))?,
+                        .map_err(|_| format!("invalid minutes: {v}"))?,
                 );
             }
-            "-s" | "--slide" => {
-                let v = it.next().ok_or("manca il valore dopo --slide")?;
+            "-s" | "--slide" | "--slides" => {
+                let v = it.next().ok_or("missing value after --slides")?;
                 a.slide = Some(
                     v.parse()
-                        .map_err(|_| format!("numero di slide non valido: {v}"))?,
+                        .map_err(|_| format!("invalid slide number: {v}"))?,
                 );
             }
             "--demo" => a.demo = true,
             "-h" | "--help" => {
                 return Err(
-                    "uso: ritardometro [config.toml] [--minuti N] [--slide N] [--demo]".into(),
+                    "usage: ritardometro [config.toml] [--minutes N] [--slides N] [--demo]".into(),
                 );
             }
             altro if !altro.starts_with('-') => a.config = Some(PathBuf::from(altro)),
-            altro => return Err(format!("opzione sconosciuta: {altro}")),
+            altro => return Err(format!("unknown option: {altro}")),
         }
     }
     Ok(a)

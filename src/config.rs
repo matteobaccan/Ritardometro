@@ -78,12 +78,12 @@ impl Default for Config {
                 MilestoneConfig {
                     percentuale: Some(50.0),
                     mancano_minuti: None,
-                    testo: "METÀ!".into(),
+                    testo: "HALF WAY!".into(),
                 },
                 MilestoneConfig {
                     percentuale: None,
                     mancano_minuti: Some(5.0),
-                    testo: "-5 MIN".into(),
+                    testo: "5 MIN LEFT".into(),
                 },
             ],
         }
@@ -168,14 +168,14 @@ pub fn carica(percorso: &Path) -> Caricata {
                 config: Config::default(),
                 percorso: percorso.to_path_buf(),
                 avviso: Some(format!(
-                    "Errore nel file di configurazione, uso i default:\n{e}"
+                    "Error in config file, falling back to defaults:\n{e}"
                 )),
             },
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
             let avviso = std::fs::write(percorso, TEMPLATE)
                 .err()
-                .map(|e| format!("Non riesco a creare {}: {e}", percorso.display()));
+                .map(|e| format!("Could not create {}: {e}", percorso.display()));
             Caricata {
                 config: Config::default(),
                 percorso: percorso.to_path_buf(),
@@ -184,8 +184,8 @@ pub fn carica(percorso: &Path) -> Caricata {
         }
         Err(e) => Caricata {
             config: Config::default(),
-            percorso: percorso.to_path_buf(),
-            avviso: Some(format!("Non riesco a leggere {}: {e}", percorso.display())),
+                percorso: percorso.to_path_buf(),
+                avviso: Some(format!("Could not read {}: {e}", percorso.display())),
         },
     }
 }

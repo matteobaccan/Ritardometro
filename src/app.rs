@@ -307,14 +307,14 @@ impl Ritardometro {
         }));
 
         let (ocr_rx, stato_ocr) = if demo {
-            (None, format!("demo: talk simulato a {VELOCITA_DEMO}x"))
+            (None, format!("demo: simulated talk at {VELOCITA_DEMO}x"))
         } else if cfg.ocr.attivo {
             match ocr::avvia(Arc::clone(&ocr_condiviso), cc.egui_ctx.clone()) {
-                Ok(rx) => (Some(rx), "OCR in avvio…".to_string()),
+                Ok(rx) => (Some(rx), "Starting OCR...".to_string()),
                 Err(e) => (None, e),
             }
         } else {
-            (None, "OCR disattivato: solo timer".to_string())
+            (None, "OCR disabled: timer only".to_string())
         };
 
         let bandierine = Bandierine::new(pacing::risolvi_milestone(
@@ -422,7 +422,7 @@ impl Ritardometro {
                 Messaggio::Lettura(l) => {
                     if let Some(tot) = self.totale() {
                         if l.slide > tot && l.totale.is_none() {
-                            self.stato_ocr = format!("letto {} (oltre {tot}): ignoro", l.slide);
+                            self.stato_ocr = format!("read {} (exceeds {tot}): ignored", l.slide);
                             continue;
                         }
                         // Se sappiamo già che il contatore ha un totale (es. "2 / 30") e in un
@@ -432,7 +432,7 @@ impl Ritardometro {
                             && l.slide == tot
                             && self.slide.is_none_or(|cur| cur + 1 < tot)
                         {
-                            self.stato_ocr = format!("OCR: visto solo il totale (/{tot})");
+                            self.stato_ocr = format!("OCR: detected total only (/{tot})");
                             continue;
                         }
                     }
@@ -463,9 +463,9 @@ impl Ritardometro {
                 Messaggio::Niente(testo) => {
                     let testo = testo.trim();
                     self.stato_ocr = if testo.is_empty() {
-                        "OCR: non vedo il contatore".into()
+                        "OCR: slide counter not found".into()
                     } else {
-                        format!("OCR: non capisco \"{}\"", accorcia(testo, 18))
+                        format!("OCR: unrecognized text \"{}\"", accorcia(testo, 18))
                     };
                 }
                 Messaggio::Errore(e) => self.stato_ocr = e,
@@ -579,7 +579,7 @@ impl Ritardometro {
 
         let dim_menu = Vec2::new(380.0, 585.0);
         let mut builder = egui::ViewportBuilder::default()
-            .with_title(concat!("Ritardometro v", env!("CARGO_PKG_VERSION"), " — Configurazione"))
+            .with_title(concat!("Ritardometro v", env!("CARGO_PKG_VERSION"), " — Settings"))
             .with_inner_size(dim_menu)
             .with_min_inner_size(dim_menu)
             .with_resizable(true)
@@ -616,14 +616,14 @@ impl Ritardometro {
     fn disegna_contenuto_menu(&mut self, ui: &mut egui::Ui, ctx_root: &egui::Context) {
         ui.horizontal(|ui| {
             let etichetta = if self.crono.in_corso() {
-                "Pausa (spazio)"
+                "Pause (space)"
             } else {
-                "Avvia (spazio)"
+                "Start (space)"
             };
             if ui.button(etichetta).clicked() {
                 self.alterna_pausa();
             }
-            if ui.button("Azzera (R)").clicked() {
+            if ui.button("Reset (R)").clicked() {
                 self.azzera();
             }
         });
@@ -634,7 +634,7 @@ impl Ritardometro {
             .num_columns(2)
             .spacing([12.0, 8.0])
             .show(ui, |ui| {
-                ui.label("Tempo:");
+                ui.label("Time:");
                 ui.horizontal(|ui| {
                     if ui.button("-1 min").clicked() {
                         self.crono.correggi(-60.0);
@@ -661,7 +661,7 @@ impl Ritardometro {
                 });
                 ui.end_row();
 
-                ui.label(format!("Dimensione ({:.0}%):", self.cfg.scala * 100.0));
+                ui.label(format!("Size ({:.0}%):", self.cfg.scala * 100.0));
                 ui.horizontal(|ui| {
                     if ui.button(" - ").clicked() {
                         self.cambia_scala(ctx_root, self.cfg.scala - 0.15);
@@ -676,9 +676,9 @@ impl Ritardometro {
                 ui.end_row();
 
                 // Riga 1: Auto
-                ui.label("Monitor OCR:");
+                ui.label("OCR Monitor:");
                 if ui
-                    .selectable_label(self.cfg.ocr.monitor == 0, "Auto (segue il Ritardometro)")
+                    .selectable_label(self.cfg.ocr.monitor == 0, "Auto (follows Ritardometro)")
                     .clicked()
                 {
                     self.cfg.ocr.monitor = 0;
@@ -689,7 +689,7 @@ impl Ritardometro {
                 ui.end_row();
 
                 // Riga 2: I monitor trovati
-                ui.label("Schermi trovati:");
+                ui.label("Detected Displays:");
                 ui.horizontal(|ui| {
                     for idx in 1..=self.num_monitor.max(1) {
                         let nome = format!("Mon {idx}");
@@ -706,8 +706,8 @@ impl Ritardometro {
                 // Riga 3: Mostra zona
                 ui.label("");
                 if ui
-                    .button("Mostra zona OCR sullo schermo")
-                    .on_hover_text("Illumina sul monitor scelto il riquadro dove l'OCR cerca il numero di slide")
+                    .button("Highlight OCR Zone on Screen")
+                    .on_hover_text("Flashes a spotlight rectangle over the captured slide counter area")
                     .clicked()
                 {
                     self.avvia_evidenziazione_ocr();
@@ -715,9 +715,9 @@ impl Ritardometro {
                 }
                 ui.end_row();
 
-                ui.label("Frequenza OCR:");
+                ui.label("OCR Rate:");
                 ui.horizontal(|ui| {
-                    for (ms, etichetta) in [(200_u64, "200 ms (veloce)"), (350, "350 ms"), (500, "500 ms")] {
+                    for (ms, etichetta) in [(200_u64, "200 ms (fast)"), (350, "350 ms"), (500, "500 ms")] {
                         if ui
                             .selectable_label(self.cfg.ocr.intervallo_ms == ms, etichetta)
                             .clicked()
@@ -733,7 +733,7 @@ impl Ritardometro {
         if ui
             .checkbox(
                 &mut self.cfg.ocr.salva_debug,
-                "Salva ritardometro-debug.png (calibrazione OCR)",
+                "Save ritardometro-debug.png (OCR calibration)",
             )
             .changed()
         {
@@ -742,10 +742,10 @@ impl Ritardometro {
 
         ui.separator();
 
-        ui.label(egui::RichText::new("Trasparenza").strong());
+        ui.label(egui::RichText::new("Transparency").strong());
         let mut op_sfondo_pct = (self.cfg.opacita_sfondo * 100.0).round();
         ui.horizontal(|ui| {
-            ui.label("Sfondo:");
+            ui.label("Background:");
             if ui
                 .add(
                     egui::Slider::new(&mut op_sfondo_pct, 0.0..=100.0)
@@ -761,7 +761,7 @@ impl Ritardometro {
 
         let mut op_tot_pct = (self.cfg.opacita * 100.0).round();
         ui.horizontal(|ui| {
-            ui.label("Avatar e testi:");
+            ui.label("Avatar & Text:");
             if ui
                 .add(
                     egui::Slider::new(&mut op_tot_pct, 15.0..=100.0)
@@ -777,12 +777,12 @@ impl Ritardometro {
 
         ui.separator();
 
-        if ui.button("Apri file di configurazione").clicked() {
+        if ui.button("Open Configuration File").clicked() {
             apri_file(&self.percorso_config);
             self.menu_aperto = false;
         }
         ui.label(
-            egui::RichText::new("riavvia dopo aver modificato il file .toml")
+            egui::RichText::new("restart app after editing .toml file")
                 .small()
                 .color(Color32::from_rgb(195, 200, 215)),
         );
@@ -806,11 +806,11 @@ impl Ritardometro {
         ui.separator();
 
         ui.horizontal(|ui| {
-            if ui.button("Chiudi menu").clicked() {
+            if ui.button("Close Menu").clicked() {
                 self.menu_aperto = false;
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("Esci dal programma").clicked() {
+                if ui.button("Quit App").clicked() {
                     ctx_root.send_viewport_cmd_to(egui::ViewportId::ROOT, ViewportCommand::Close);
                 }
             });
@@ -841,7 +841,7 @@ impl Ritardometro {
         }
 
         let (rx, ry, rw, rh) = info.rect_ocr;
-        let titolo_evidenzia = "Ritardometro — Zona OCR";
+        let titolo_evidenzia = "Ritardometro — OCR Area";
         let ppp = ctx.pixels_per_point().max(1.0);
         let builder = egui::ViewportBuilder::default()
             .with_title(titolo_evidenzia)
@@ -855,9 +855,9 @@ impl Ritardometro {
 
         let id_ev = egui::ViewportId::from_hash_of("ritardometro_evidenzia_ocr");
         let modalita = if self.cfg.ocr.monitor == 0 {
-            format!("AUTO -> MONITOR {} di {}", info.numero_monitor, info.totale_monitor)
+            format!("AUTO -> DISPLAY {} of {}", info.numero_monitor, info.totale_monitor)
         } else {
-            format!("MONITOR {} di {}", info.numero_monitor, info.totale_monitor)
+            format!("DISPLAY {} of {}", info.numero_monitor, info.totale_monitor)
         };
 
         ctx.show_viewport_immediate(id_ev, builder, |ui, _class| {
@@ -893,7 +893,7 @@ impl Ritardometro {
             p.text(
                 Pos2::new(c.x, c.y + 12.0),
                 Align2::CENTER_CENTER,
-                format!("Zona OCR slide ({}×{})", info.dim_monitor.0, info.dim_monitor.1),
+                format!("Slide OCR Area ({}×{})", info.dim_monitor.0, info.dim_monitor.1),
                 FontId::proportional(13.0),
                 Color32::WHITE.linear_multiply(fade),
             );
@@ -1381,27 +1381,27 @@ impl eframe::App for Ritardometro {
         // riga di stato
         let riga = match (&fase, &andatura) {
             (Fase::Attesa, _) => match (self.slide, totale) {
-                (Some(sl), Some(tot)) => format!("slide {sl}/{tot} — clic o cambia slide"),
-                (Some(sl), None) => format!("slide {sl} — clic o cambia slide"),
+                (Some(sl), Some(tot)) => format!("slide {sl}/{tot} — click or advance slide"),
+                (Some(sl), None) => format!("slide {sl} — click or advance slide"),
                 _ if self.cfg.avvio_automatico && self.ocr_rx.is_some() => {
-                    "clic o cambia slide per partire".to_string()
+                    "click or advance slide to start".to_string()
                 }
-                _ => "clic per partire".to_string(),
+                _ => "click to start".to_string(),
             },
-            (Fase::Domande { .. }, _) => "applausi! tempo delle domande".to_string(),
-            (Fase::Concluso, _) => "talk concluso! applausi!".to_string(),
-            (Fase::Sforato { .. }, _) => "tempo scaduto!".to_string(),
+            (Fase::Domande { .. }, _) => "applause! Q&A time".to_string(),
+            (Fase::Concluso, _) => "talk concluded! applause!".to_string(),
+            (Fase::Sforato { .. }, _) => "time's up!".to_string(),
             (Fase::Talk, _) if ultima_slide => format!(
-                "slide {}/{}  fine talk! applausi!",
+                "slide {}/{}  talk finished! applause!",
                 self.slide.unwrap_or(0),
                 totale.unwrap_or(0),
             ),
             (Fase::Talk, Some(a)) => {
                 let giudizio = match a.ritmo {
-                    Ritmo::InLinea => "in linea",
-                    Ritmo::Anticipo => "anticipo",
-                    Ritmo::Ritardo => "ritardo",
-                    Ritmo::Panico => "accelera!",
+                    Ritmo::InLinea => "on track",
+                    Ritmo::Anticipo => "ahead",
+                    Ritmo::Ritardo => "behind",
+                    Ritmo::Panico => "speed up!",
                 };
                 format!(
                     "slide {}/{}  {} {}",
@@ -1412,8 +1412,8 @@ impl eframe::App for Ritardometro {
                 )
             }
             (Fase::Talk, None) => match self.slide {
-                Some(sl) => format!("slide {sl}  (totale sconosciuto)"),
-                None => "tempo rimanente".to_string(),
+                Some(sl) => format!("slide {sl}  (unknown total)"),
+                None => "remaining time".to_string(),
             },
         };
         painter.text(
@@ -1462,7 +1462,7 @@ impl eframe::App for Ritardometro {
         let nota = if let Some(a) = &self.avviso {
             accorcia(a.lines().next().unwrap_or(a), 40)
         } else if !self.crono.in_corso() && !self.crono.mai_avviato() {
-            "in pausa".to_string()
+            "paused".to_string()
         } else {
             accorcia(&self.stato_ocr, 40)
         };
@@ -1505,7 +1505,7 @@ fn stato_avatar(
                 applauso: true,
                 opacita: 1.0,
                 bandiera: Some(Bandiera {
-                    testo: "DOMANDE?".into(),
+                    testo: "Q&A?".into(),
                     colore: GIALLO,
                     alzata: 1.0,
                 }),
@@ -1521,7 +1521,7 @@ fn stato_avatar(
                 applauso: true,
                 opacita: 1.0,
                 bandiera: Some(Bandiera {
-                    testo: "BRAVO!".into(),
+                    testo: "GREAT!".into(),
                     colore: VERDE,
                     alzata: 1.0,
                 }),
@@ -1553,7 +1553,7 @@ fn stato_avatar(
                 applauso: true,
                 opacita: 1.0,
                 bandiera: Some(Bandiera {
-                    testo: "BRAVO!".into(),
+                    testo: "GREAT!".into(),
                     colore: VERDE,
                     alzata: 1.0,
                 }),

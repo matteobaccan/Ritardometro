@@ -25,7 +25,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Dipendenze Linux (X11/Wayland/OpenGL)
+      - name: Linux dependencies (X11/Wayland/OpenGL)
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update

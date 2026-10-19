@@ -1,76 +1,75 @@
 # ============================================================
-#  Ritardometro - configurazione
+#  Ritardometro - Configuration
 # ============================================================
 
-# Durata della parte "parlata" del talk, in minuti (domande escluse)
+# Duration of the spoken talk in minutes (excluding Q&A)
 durata_minuti = 30
 
-# Minuti riservati alle domande: a fine talk parte il conto alla rovescia delle Q&A.
-# 0 = nessun conto alla rovescia per le domande
+# Minutes reserved for questions: triggers the Q&A countdown after the talk ends.
+# 0 = no countdown for questions
 domande_minuti = 10
 
-# Numero totale di slide.
-# 0 = usa il totale letto dallo schermo (se il contatore mostra "12 / 40")
+# Total number of slides.
+# 0 = use the total detected on screen (e.g. if the slide counter says "12 / 40")
 totale_slide = 30
 
-# Avvia il timer da solo appena l'OCR vede che sei passato dalla slide 1 alla 2
+# Automatically start the timer when OCR detects advancing from slide 1 to 2
 avvio_automatico = true
 
-# Entro quanti secondi di scarto sei considerato "in linea"
+# Tolerance in seconds to be considered "on track"
 tolleranza_secondi = 60
 
-# Oltre quanti secondi di ritardo l'avatar va nel panico
+# Panic threshold in seconds behind schedule before the avatar panics
 panico_secondi = 180
 
-# Dimensione dell'overlay (1.0 = normale, 1.5 = più grande)
+# Overlay scale (1.0 = standard, 1.5 = larger)
 scala = 1.0
 
-# Opacità del riquadro dietro all'avatar (0.0 = invisibile, 1.0 = pieno)
+# Background box opacity behind the avatar (0.0 = transparent, 1.0 = solid)
 opacita_sfondo = 0.70
 
-# Opacità complessiva dell'overlay (avatar e testi, da 0.15 a 1.0)
+# Overall overlay opacity (avatar and text, from 0.15 to 1.0)
 opacita = 1.0
 
-# Dove appare l'overlay: "alto-sinistra", "alto-destra", "basso-sinistra", "basso-destra"
-# (puoi comunque trascinarlo dove vuoi)
+# Initial overlay position: "alto-sinistra", "alto-destra", "basso-sinistra", "basso-destra"
+# (you can still drag it anywhere)
 posizione = "alto-destra"
 
-# Distanza dal bordo dello schermo, in punti
+# Margin from screen edge in points
 margine = 24
 
 [ocr]
-# Legge il numero di slide dallo schermo. false = solo timer
+# Screen slide counter OCR reader. false = timer only
 attivo = true
 
-# Monitor da leggere: 0 = automatico (lo schermo su cui si trova il Ritardometro), 1 = primo monitor, 2 = secondo, ...
+# Monitor to capture: 0 = auto (follows Ritardometro overlay), 1 = first monitor, 2 = second, ...
 monitor = 0
 
-# Rettangolo dove si trova il contatore delle slide, in frazioni dello schermo
-# (0.0 = bordo sinistro/alto, 1.0 = bordo destro/basso).
-# Default: angolo in basso a destra, dove Marp mette la paginazione.
+# Screen rectangle where slide counter appears, in fractions of screen size
+# (0.0 = left/top edge, 1.0 = right/bottom edge).
+# Default: bottom-right corner where Marp and PDF viewers show pagination.
 x = 0.85
 y = 0.88
 larghezza = 0.15
 altezza = 0.12
 
-# Ogni quanti millisecondi leggere lo schermo
+# How often to capture and run OCR (milliseconds)
 intervallo_ms = 250
 
-# Ingrandimento dell'immagine prima dell'OCR (i numeri piccoli si leggono meglio)
+# Pre-OCR image magnification factor (small fonts are recognized much better)
 ingrandimento = 3
 
-# true = salva ogni cattura in "ritardometro-debug.png" accanto all'eseguibile,
-# utile per calibrare il rettangolo qui sopra
+# true = save every capture to "ritardometro-debug.png" next to executable (OCR calibration)
 salva_debug = false
 
 # ------------------------------------------------------------
-#  Momenti speciali: l'avatar sventola una bandierina.
-#  Usa "percentuale" (del talk) oppure "mancano_minuti".
+#  Milestone speech balloons: animated popup speech bubbles.
+#  Specify either "percentuale" (of talk) or "mancano_minuti".
 # ------------------------------------------------------------
 [[milestone]]
 percentuale = 50
-testo = "METÀ!"
+testo = "HALF WAY!"
 
 [[milestone]]
 mancano_minuti = 5
-testo = "-5 MIN"
+testo = "5 MIN LEFT"
