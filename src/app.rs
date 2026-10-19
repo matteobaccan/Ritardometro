@@ -308,7 +308,7 @@ impl Ritardometro {
 
         let (ocr_rx, stato_ocr) = if demo {
             (None, format!("demo: simulated talk at {VELOCITA_DEMO}x"))
-        } else if cfg.ocr.attivo {
+        } else if cfg.ocr.enabled {
             match ocr::avvia(Arc::clone(&ocr_condiviso), cc.egui_ctx.clone()) {
                 Ok(rx) => (Some(rx), "Starting OCR...".to_string()),
                 Err(e) => (None, e),
@@ -361,7 +361,7 @@ impl Ritardometro {
     fn simula(&mut self) {
         let Some(inizio) = self.demo else { return };
         let durata = self.cfg.durata_secondi();
-        let ciclo = durata + self.cfg.domande_minuti * 60.0 + 90.0;
+        let ciclo = durata + self.cfg.questions_minutes * 60.0 + 90.0;
         let sim = (inizio.elapsed().as_secs_f32() * VELOCITA_DEMO) % ciclo;
         self.crono = Cronometro::new();
         self.crono.correggi(sim);
@@ -376,7 +376,7 @@ impl Ritardometro {
 
     fn totale(&self) -> Option<u32> {
         self.totale_letto
-            .or_else(|| (self.cfg.totale_slide > 0).then_some(self.cfg.totale_slide))
+            .or_else(|| (self.cfg.total_slides > 0).then_some(self.cfg.total_slides))
     }
 
     fn in_pausa(&self) -> bool {
@@ -398,7 +398,7 @@ impl Ritardometro {
         let vecchia = self.slide;
         self.slide = Some(nuova);
         // Avvio automatico: appena si passa alla slide successiva alla prima vista.
-        if self.cfg.avvio_automatico && self.crono.mai_avviato() {
+        if self.cfg.auto_start && self.crono.mai_avviato() {
             if let Some(v) = vecchia {
                 if nuova > v {
                     self.crono.avvia();
@@ -496,10 +496,10 @@ impl Ritardometro {
         }
         if ctrl {
             if piu {
-                self.cambia_scala(ctx, self.cfg.scala + 0.15);
+                self.cambia_scala(ctx, self.cfg.scale + 0.15);
             }
             if meno {
-                self.cambia_scala(ctx, self.cfg.scala - 0.15);
+                self.cambia_scala(ctx, self.cfg.scale - 0.15);
             }
             if zero {
                 self.cambia_scala(ctx, 1.0);
@@ -514,7 +514,7 @@ impl Ritardometro {
         }
         if scroll_y.abs() > 0.1 {
             let passo = (scroll_y / 50.0).clamp(-0.3, 0.3);
-            self.cambia_scala(ctx, self.cfg.scala + passo);
+            self.cambia_scala(ctx, self.cfg.scale + passo);
         }
         if destra {
             let s = self.slide.unwrap_or(0) + 1;
@@ -535,11 +535,11 @@ impl Ritardometro {
 
     fn cambia_scala(&mut self, ctx: &egui::Context, nuova: f32) {
         let nuova = nuova.clamp(0.5, 3.0);
-        if (nuova - self.cfg.scala).abs() > 0.005 {
-            self.cfg.scala = nuova;
+        if (nuova - self.cfg.scale).abs() > 0.005 {
+            self.cfg.scale = nuova;
             ctx.send_viewport_cmd_to(
                 egui::ViewportId::ROOT,
-                ViewportCommand::InnerSize(Vec2::new(LARGHEZZA, ALTEZZA) * self.cfg.scala),
+                ViewportCommand::InnerSize(Vec2::new(LARGHEZZA, ALTEZZA) * self.cfg.scale),
             );
             ctx.request_repaint();
         }
@@ -553,15 +553,15 @@ impl Ritardometro {
         let Some(monitor) = ctx.input(|i| i.viewport().monitor_size) else {
             return;
         };
-        let dim = Vec2::new(LARGHEZZA, ALTEZZA) * self.cfg.scala;
-        let m = self.cfg.margine;
-        let x = match self.cfg.posizione {
-            Posizione::AltoSinistra | Posizione::BassoSinistra => m,
-            Posizione::AltoDestra | Posizione::BassoDestra => monitor.x - dim.x - m,
+        let dim = Vec2::new(LARGHEZZA, ALTEZZA) * self.cfg.scale;
+        let m = self.cfg.margin;
+        let x = match self.cfg.position {
+            Posizione::TopLeft | Posizione::BottomLeft => m,
+            Posizione::TopRight | Posizione::BottomRight => monitor.x - dim.x - m,
         };
-        let y = match self.cfg.posizione {
-            Posizione::AltoSinistra | Posizione::AltoDestra => m,
-            Posizione::BassoSinistra | Posizione::BassoDestra => monitor.y - dim.y - m - 48.0,
+        let y = match self.cfg.position {
+            Posizione::TopLeft | Posizione::TopRight => m,
+            Posizione::BottomLeft | Posizione::BottomRight => monitor.y - dim.y - m - 48.0,
         };
         ctx.send_viewport_cmd(ViewportCommand::OuterPosition(Pos2::new(
             x.max(0.0),
@@ -661,13 +661,13 @@ impl Ritardometro {
                 });
                 ui.end_row();
 
-                ui.label(format!("Size ({:.0}%):", self.cfg.scala * 100.0));
+                ui.label(format!("Size ({:.0}%):", self.cfg.scale * 100.0));
                 ui.horizontal(|ui| {
                     if ui.button(" - ").clicked() {
-                        self.cambia_scala(ctx_root, self.cfg.scala - 0.15);
+                        self.cambia_scala(ctx_root, self.cfg.scale - 0.15);
                     }
                     if ui.button(" + ").clicked() {
-                        self.cambia_scala(ctx_root, self.cfg.scala + 0.15);
+                        self.cambia_scala(ctx_root, self.cfg.scale + 0.15);
                     }
                     if ui.button("100%").clicked() {
                         self.cambia_scala(ctx_root, 1.0);
@@ -719,10 +719,10 @@ impl Ritardometro {
                 ui.horizontal(|ui| {
                     for (ms, etichetta) in [(200_u64, "200 ms (fast)"), (350, "350 ms"), (500, "500 ms")] {
                         if ui
-                            .selectable_label(self.cfg.ocr.intervallo_ms == ms, etichetta)
+                            .selectable_label(self.cfg.ocr.interval_ms == ms, etichetta)
                             .clicked()
                         {
-                            self.cfg.ocr.intervallo_ms = ms;
+                            self.cfg.ocr.interval_ms = ms;
                             self.sincronizza_ocr_condiviso();
                         }
                     }
@@ -732,7 +732,7 @@ impl Ritardometro {
 
         if ui
             .checkbox(
-                &mut self.cfg.ocr.salva_debug,
+                &mut self.cfg.ocr.save_debug,
                 "Save ritardometro-debug.png (OCR calibration)",
             )
             .changed()
@@ -743,7 +743,7 @@ impl Ritardometro {
         ui.separator();
 
         ui.label(egui::RichText::new("Transparency").strong());
-        let mut op_sfondo_pct = (self.cfg.opacita_sfondo * 100.0).round();
+        let mut op_sfondo_pct = (self.cfg.background_opacity * 100.0).round();
         ui.horizontal(|ui| {
             ui.label("Background:");
             if ui
@@ -754,12 +754,12 @@ impl Ritardometro {
                 )
                 .changed()
             {
-                self.cfg.opacita_sfondo = (op_sfondo_pct / 100.0).clamp(0.0, 1.0);
+                self.cfg.background_opacity = (op_sfondo_pct / 100.0).clamp(0.0, 1.0);
                 ctx_root.request_repaint();
             }
         });
 
-        let mut op_tot_pct = (self.cfg.opacita * 100.0).round();
+        let mut op_tot_pct = (self.cfg.opacity * 100.0).round();
         ui.horizontal(|ui| {
             ui.label("Avatar & Text:");
             if ui
@@ -770,7 +770,7 @@ impl Ritardometro {
                 )
                 .changed()
             {
-                self.cfg.opacita = (op_tot_pct / 100.0).clamp(0.15, 1.0);
+                self.cfg.opacity = (op_tot_pct / 100.0).clamp(0.15, 1.0);
                 ctx_root.request_repaint();
             }
         });
@@ -938,8 +938,8 @@ impl Ritardometro {
             self.cfg.durata_secondi(),
             self.slide?,
             self.totale()?,
-            self.cfg.tolleranza_secondi,
-            self.cfg.panico_secondi,
+            self.cfg.tolerance_seconds,
+            self.cfg.panic_seconds,
         )
     }
 
@@ -978,7 +978,7 @@ impl Ritardometro {
                             dir,
                             start_cur: cur,
                             start_rect: rect,
-                            scala0: self.cfg.scala,
+                            scala0: self.cfg.scale,
                         });
                     }
                 }
@@ -1028,7 +1028,7 @@ impl Ritardometro {
                             _ => rw.start_rect.top,
                         };
 
-                        self.cfg.scala = nuova_scala;
+                        self.cfg.scale = nuova_scala;
                         win32_drag::SetWindowPos(
                             rw.hwnd,
                             0,
@@ -1151,7 +1151,7 @@ impl eframe::App for Ritardometro {
 
         let t = self.nascita.elapsed().as_secs_f32();
         let durata = self.cfg.durata_secondi();
-        let domande = self.cfg.domande_minuti * 60.0;
+        let domande = self.cfg.questions_minutes * 60.0;
         let trascorsi = self.crono.trascorsi();
         self.bandierine.aggiorna(trascorsi, t);
         let andatura = self.andatura(trascorsi);
@@ -1199,7 +1199,7 @@ impl eframe::App for Ritardometro {
         } else if premuto {
             if let Some(pos) = interact_pos.or(hover_pos) {
                 if let Some(dir) = zona_resize(area, pos, s) {
-                    self.resize_attivo = Some((dir, pos, self.cfg.scala));
+                    self.resize_attivo = Some((dir, pos, self.cfg.scale));
                     avvia_resize_dir = Some(dir);
                 } else if area.contains(pos) {
                     avvia_drag_win32 = true;
@@ -1292,7 +1292,7 @@ impl eframe::App for Ritardometro {
         // ---------------- stato dell'avatar ----------------
         let (mut stato, colore_scarto) =
             stato_avatar(&self.cfg, &fase, andatura.as_ref(), ultima_slide);
-        stato.opacita = self.cfg.opacita;
+        stato.opacita = self.cfg.opacity;
         if let Some((testo, p)) = self.bandierine.corrente() {
             if stato.bandiera.is_none() {
                 stato.bandiera = Some(Bandiera {
@@ -1309,7 +1309,7 @@ impl eframe::App for Ritardometro {
         stato.alza_rosso = ctx.animate_value_with_time(Id::unique("rosso"), stato.alza_rosso, anim);
 
         // ---------------- disegno ----------------
-        let op = self.cfg.opacita.clamp(0.15, 1.0);
+        let op = self.cfg.opacity.clamp(0.15, 1.0);
         let applica_op = |c: Color32| -> Color32 {
             if op >= 0.999 {
                 c
@@ -1323,7 +1323,7 @@ impl eframe::App for Ritardometro {
         painter.rect_filled(
             fondo,
             CornerRadius::same((18.0 * s).clamp(4.0, 255.0) as u8),
-            Color32::from_black_alpha((self.cfg.opacita_sfondo * op * 255.0) as u8),
+            Color32::from_black_alpha((self.cfg.background_opacity * op * 255.0) as u8),
         );
 
         // Maniglia di ridimensionamento nell'angolo in basso a destra
@@ -1383,7 +1383,7 @@ impl eframe::App for Ritardometro {
             (Fase::Attesa, _) => match (self.slide, totale) {
                 (Some(sl), Some(tot)) => format!("slide {sl}/{tot} — click or advance slide"),
                 (Some(sl), None) => format!("slide {sl} — click or advance slide"),
-                _ if self.cfg.avvio_automatico && self.ocr_rx.is_some() => {
+                _ if self.cfg.auto_start && self.ocr_rx.is_some() => {
                     "click or advance slide to start".to_string()
                 }
                 _ => "click to start".to_string(),
@@ -1490,8 +1490,8 @@ fn stato_avatar(
     andatura: Option<&Andatura>,
     ultima_slide: bool,
 ) -> (StatoAvatar, Color32) {
-    let tol = cfg.tolleranza_secondi;
-    let pan = cfg.panico_secondi;
+    let tol = cfg.tolerance_seconds;
+    let pan = cfg.panic_seconds;
     let frazione = |x: f32| ((x - tol) / (pan - tol).max(1.0)).clamp(0.0, 1.0);
 
     match fase {

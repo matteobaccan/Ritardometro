@@ -3,44 +3,44 @@
 # ============================================================
 
 # Duration of the spoken talk in minutes (excluding Q&A)
-durata_minuti = 30
+duration_minutes = 30
 
 # Minutes reserved for questions: triggers the Q&A countdown after the talk ends.
 # 0 = no countdown for questions
-domande_minuti = 10
+questions_minutes = 10
 
 # Total number of slides.
 # 0 = use the total detected on screen (e.g. if the slide counter says "12 / 40")
-totale_slide = 30
+total_slides = 30
 
 # Automatically start the timer when OCR detects advancing from slide 1 to 2
-avvio_automatico = true
+auto_start = true
 
 # Tolerance in seconds to be considered "on track"
-tolleranza_secondi = 60
+tolerance_seconds = 60
 
 # Panic threshold in seconds behind schedule before the avatar panics
-panico_secondi = 180
+panic_seconds = 180
 
 # Overlay scale (1.0 = standard, 1.5 = larger)
-scala = 1.0
+scale = 1.0
 
 # Background box opacity behind the avatar (0.0 = transparent, 1.0 = solid)
-opacita_sfondo = 0.70
+background_opacity = 0.70
 
 # Overall overlay opacity (avatar and text, from 0.15 to 1.0)
-opacita = 1.0
+opacity = 1.0
 
-# Initial overlay position: "alto-sinistra", "alto-destra", "basso-sinistra", "basso-destra"
+# Initial overlay position: "top-left", "top-right", "bottom-left", "bottom-right"
 # (you can still drag it anywhere)
-posizione = "alto-destra"
+position = "top-right"
 
 # Margin from screen edge in points
-margine = 24
+margin = 24
 
 [ocr]
 # Screen slide counter OCR reader. false = timer only
-attivo = true
+enabled = true
 
 # Monitor to capture: 0 = auto (follows Ritardometro overlay), 1 = first monitor, 2 = second, ...
 monitor = 0
@@ -50,26 +50,26 @@ monitor = 0
 # Default: bottom-right corner where Marp and PDF viewers show pagination.
 x = 0.85
 y = 0.88
-larghezza = 0.15
-altezza = 0.12
+width = 0.15
+height = 0.12
 
 # How often to capture and run OCR (milliseconds)
-intervallo_ms = 250
+interval_ms = 250
 
 # Pre-OCR image magnification factor (small fonts are recognized much better)
-ingrandimento = 3
+magnification = 3
 
 # true = save every capture to "ritardometro-debug.png" next to executable (OCR calibration)
-salva_debug = false
+save_debug = false
 
 # ------------------------------------------------------------
 #  Milestone speech balloons: animated popup speech bubbles.
-#  Specify either "percentuale" (of talk) or "mancano_minuti".
+#  Specify either "percentage" (of talk) or "minutes_left".
 # ------------------------------------------------------------
 [[milestone]]
-percentuale = 50
-testo = "HALF WAY!"
+percentage = 50
+text = "HALF WAY!"
 
 [[milestone]]
-mancano_minuti = 5
-testo = "5 MIN LEFT"
+minutes_left = 5
+text = "5 MIN LEFT"

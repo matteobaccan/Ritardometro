@@ -60,9 +60,9 @@ fn ciclo(
             centro_finestra: None,
             in_pausa: false,
         });
-        let intervallo = stato.cfg.intervallo_ms;
+        let intervallo = stato.cfg.interval_ms;
 
-        if stato.in_pausa || !stato.cfg.attivo {
+        if stato.in_pausa || !stato.cfg.enabled {
             std::thread::sleep(Duration::from_millis(150));
             continue;
         }
@@ -94,8 +94,8 @@ fn leggi(
     debug: Option<&std::path::Path>,
 ) -> Result<String, String> {
     let grezza = cattura(cfg, centro_finestra)?;
-    let immagine = prepara(grezza, cfg.ingrandimento);
-    if cfg.salva_debug {
+    let immagine = prepara(grezza, cfg.magnification);
+    if cfg.save_debug {
         if let Some(p) = debug {
             let _ = immagine.save(p);
         }
@@ -190,8 +190,8 @@ pub fn info_zona_ocr(
 
     let x = ((cfg.x * w as f32) as u32).min(w.saturating_sub(1));
     let y = ((cfg.y * h as f32) as u32).min(h.saturating_sub(1));
-    let rw = ((cfg.larghezza * w as f32) as u32).clamp(1, w - x);
-    let rh = ((cfg.altezza * h as f32) as u32).clamp(1, h - y);
+    let rw = ((cfg.width * w as f32) as u32).clamp(1, w - x);
+    let rh = ((cfg.height * h as f32) as u32).clamp(1, h - y);
 
     Some(super::InfoZonaOcr {
         numero_monitor,
@@ -215,8 +215,8 @@ fn cattura(
     let h = m.height().map_err(|e| e.to_string())?;
     let x = ((cfg.x * w as f32) as u32).min(w.saturating_sub(1));
     let y = ((cfg.y * h as f32) as u32).min(h.saturating_sub(1));
-    let rw = ((cfg.larghezza * w as f32) as u32).clamp(1, w - x);
-    let rh = ((cfg.altezza * h as f32) as u32).clamp(1, h - y);
+    let rw = ((cfg.width * w as f32) as u32).clamp(1, w - x);
+    let rh = ((cfg.height * h as f32) as u32).clamp(1, h - y);
     m.capture_region(x, y, rw, rh)
         .map_err(|e| format!("Screen capture failed: {e}"))
 }

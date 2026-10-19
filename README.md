@@ -135,45 +135,45 @@ Changes made via the Settings window apply immediately to your active session; e
 All options available in `ritardometro.toml`:
 
 ```toml
-durata_minuti = 30        # Talk duration in minutes (excluding Q&A)
-domande_minuti = 10       # Q&A countdown duration in minutes (0 = none)
-totale_slide = 30         # Total slides (0 = auto-detect total from screen e.g. "12 / 40")
-avvio_automatico = true   # Auto-start timer when advancing from slide 1 to 2
-tolleranza_secondi = 60   # Seconds of delta considered "on track"
-panico_secondi = 180      # Seconds behind schedule before avatar panics
-scala = 1.0               # Initial overlay scale factor
-opacita_sfondo = 0.70     # HUD background box opacity (0.0 - 1.0)
-opacita = 1.0             # Avatar and text opacity (0.15 - 1.0)
-posizione = "alto-destra" # Initial corner: "alto-sinistra", "alto-destra", "basso-sinistra", "basso-destra"
-margine = 24              # Margin from screen edge in points
+duration_minutes = 30     # Talk duration in minutes (excluding Q&A)
+questions_minutes = 10    # Q&A countdown duration in minutes (0 = none)
+total_slides = 30         # Total slides (0 = auto-detect total from screen e.g. "12 / 40")
+auto_start = true         # Auto-start timer when advancing from slide 1 to 2
+tolerance_seconds = 60    # Seconds of delta considered "on track"
+panic_seconds = 180       # Seconds behind schedule before avatar panics
+scale = 1.0               # Initial overlay scale factor
+background_opacity = 0.70 # HUD background box opacity (0.0 - 1.0)
+opacity = 1.0             # Avatar and text opacity (0.15 - 1.0)
+position = "top-right"    # Initial corner: "top-left", "top-right", "bottom-left", "bottom-right"
+margin = 24               # Margin from screen edge in points
 
 [ocr]
-attivo = true             # false = timer-only mode (no OCR)
+enabled = true            # false = timer-only mode (no OCR)
 monitor = 0               # 0 = auto (follows overlay monitor), 1, 2, 3... = fixed monitor
 # Slide counter bounding box in screen fractions (default: bottom-right corner)
 x = 0.85
 y = 0.88
-larghezza = 0.15
-altezza = 0.12
-intervallo_ms = 250       # OCR capture interval in milliseconds
-ingrandimento = 3         # Pre-OCR scaling factor
-salva_debug = false       # true = save capture to ritardometro-debug.png
+width = 0.15
+height = 0.12
+interval_ms = 250         # OCR capture interval in milliseconds
+magnification = 3         # Pre-OCR scaling factor
+save_debug = false        # true = save capture to ritardometro-debug.png
 
 [[milestone]]
-percentuale = 50
-testo = "HALF WAY!"
+percentage = 50
+text = "HALF WAY!"
 
 [[milestone]]
-mancano_minuti = 5
-testo = "5 MIN LEFT"
+minutes_left = 5
+text = "5 MIN LEFT"
 ```
 
-You can define as many `[[milestone]]` sections as needed, using either `percentuale` of talk duration or `mancano_minuti`.
+You can define as many `[[milestone]]` sections as needed, using either `percentage` of talk duration or `minutes_left`.
 
 ### Troubleshooting OCR
 
 - OCR captures the **monitor display region** (independent of window focus): with `monitor = 0` it captures the monitor where Ritardometro is located. Use **Highlight OCR Zone on Screen** in Settings to inspect which screen and bounding box are being captured.
-- Enable **Save ritardometro-debug.png** in Settings (or `salva_debug = true`) and inspect `ritardometro-debug.png`: it should tightly frame your slide counter numbers. Adjust `x`, `y`, `larghezza`, `altezza` if needed.
+- Enable **Save ritardometro-debug.png** in Settings (or `save_debug = true`) and inspect `ritardometro-debug.png`: it should tightly frame your slide counter numbers. Adjust `x`, `y`, `width`, `height` if needed.
 - Do not place the Ritardometro overlay directly on top of the slide counter to prevent self-capture.
 - Windows OCR uses installed system language packs. If you see an OCR unavailable message, install a language pack with optical character recognition under *Settings > Time & Language > Language*.
 - In Marp presentations, a formatted counter like `12 / 40` works reliably:

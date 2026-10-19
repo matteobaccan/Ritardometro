@@ -145,14 +145,14 @@ pub fn risolvi_milestone(cfg: &[MilestoneConfig], durata: f32) -> Vec<Milestone>
     let mut v: Vec<Milestone> = cfg
         .iter()
         .filter_map(|m| {
-            let secondi = match (m.percentuale, m.mancano_minuti) {
+            let secondi = match (m.percentage, m.minutes_left) {
                 (Some(p), _) => durata * p / 100.0,
                 (None, Some(min)) => durata - min * 60.0,
                 (None, None) => return None,
             };
             (secondi > 0.0 && secondi < durata).then(|| Milestone {
                 secondi,
-                testo: m.testo.clone(),
+                testo: m.text.clone(),
             })
         })
         .collect();

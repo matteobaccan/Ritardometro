@@ -80,17 +80,17 @@ fn main() -> eframe::Result {
     let percorso = args.config.clone().unwrap_or_else(config::percorso_default);
     let mut caricata = config::carica(&percorso);
     if let Some(m) = args.minuti {
-        caricata.config.durata_minuti = m.max(1.0);
+        caricata.config.duration_minutes = m.max(1.0);
     }
     if let Some(s) = args.slide {
-        caricata.config.totale_slide = s;
+        caricata.config.total_slides = s;
     }
     if let Some(e) = errore_args {
         caricata.avviso = Some(e);
     }
 
     let demo = args.demo;
-    let scala = caricata.config.scala;
+    let scala = caricata.config.scale;
     let opzioni = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("Ritardometro")

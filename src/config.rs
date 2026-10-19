@@ -13,17 +13,28 @@ pub const TEMPLATE: &str = include_str!("../ritardometro.toml");
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
-    pub durata_minuti: f32,
-    pub domande_minuti: f32,
-    pub totale_slide: u32,
-    pub avvio_automatico: bool,
-    pub tolleranza_secondi: f32,
-    pub panico_secondi: f32,
-    pub scala: f32,
-    pub opacita_sfondo: f32,
-    pub opacita: f32,
-    pub posizione: Posizione,
-    pub margine: f32,
+    #[serde(alias = "durata_minuti")]
+    pub duration_minutes: f32,
+    #[serde(alias = "domande_minuti")]
+    pub questions_minutes: f32,
+    #[serde(alias = "totale_slide")]
+    pub total_slides: u32,
+    #[serde(alias = "avvio_automatico")]
+    pub auto_start: bool,
+    #[serde(alias = "tolleranza_secondi")]
+    pub tolerance_seconds: f32,
+    #[serde(alias = "panico_secondi")]
+    pub panic_seconds: f32,
+    #[serde(alias = "scala")]
+    pub scale: f32,
+    #[serde(alias = "opacita_sfondo")]
+    pub background_opacity: f32,
+    #[serde(alias = "opacita")]
+    pub opacity: f32,
+    #[serde(alias = "posizione")]
+    pub position: Posizione,
+    #[serde(alias = "margine")]
+    pub margin: f32,
     pub ocr: OcrConfig,
     pub milestone: Vec<MilestoneConfig>,
 }
@@ -31,59 +42,72 @@ pub struct Config {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Posizione {
-    AltoSinistra,
-    AltoDestra,
-    BassoSinistra,
-    BassoDestra,
+    #[serde(alias = "alto-sinistra", alias = "top-left")]
+    TopLeft,
+    #[serde(alias = "alto-destra", alias = "top-right")]
+    TopRight,
+    #[serde(alias = "basso-sinistra", alias = "bottom-left")]
+    BottomLeft,
+    #[serde(alias = "basso-destra", alias = "bottom-right")]
+    BottomRight,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct OcrConfig {
-    pub attivo: bool,
+    #[serde(alias = "attivo")]
+    pub enabled: bool,
     pub monitor: usize,
     pub x: f32,
     pub y: f32,
-    pub larghezza: f32,
-    pub altezza: f32,
-    pub intervallo_ms: u64,
-    pub ingrandimento: u32,
-    pub salva_debug: bool,
+    #[serde(alias = "larghezza")]
+    pub width: f32,
+    #[serde(alias = "altezza")]
+    pub height: f32,
+    #[serde(alias = "intervallo_ms")]
+    pub interval_ms: u64,
+    #[serde(alias = "ingrandimento")]
+    pub magnification: u32,
+    #[serde(alias = "salva_debug")]
+    pub save_debug: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct MilestoneConfig {
-    pub percentuale: Option<f32>,
-    pub mancano_minuti: Option<f32>,
-    pub testo: String,
+    #[serde(alias = "percentuale")]
+    pub percentage: Option<f32>,
+    #[serde(alias = "mancano_minuti")]
+    pub minutes_left: Option<f32>,
+    #[serde(alias = "testo")]
+    pub text: String,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
-            durata_minuti: 30.0,
-            domande_minuti: 10.0,
-            totale_slide: 30,
-            avvio_automatico: true,
-            tolleranza_secondi: 60.0,
-            panico_secondi: 180.0,
-            scala: 1.0,
-            opacita_sfondo: 0.70,
-            opacita: 1.0,
-            posizione: Posizione::AltoDestra,
-            margine: 24.0,
+            duration_minutes: 30.0,
+            questions_minutes: 10.0,
+            total_slides: 30,
+            auto_start: true,
+            tolerance_seconds: 60.0,
+            panic_seconds: 180.0,
+            scale: 1.0,
+            background_opacity: 0.70,
+            opacity: 1.0,
+            position: Posizione::TopRight,
+            margin: 24.0,
             ocr: OcrConfig::default(),
             milestone: vec![
                 MilestoneConfig {
-                    percentuale: Some(50.0),
-                    mancano_minuti: None,
-                    testo: "HALF WAY!".into(),
+                    percentage: Some(50.0),
+                    minutes_left: None,
+                    text: "HALF WAY!".into(),
                 },
                 MilestoneConfig {
-                    percentuale: None,
-                    mancano_minuti: Some(5.0),
-                    testo: "5 MIN LEFT".into(),
+                    percentage: None,
+                    minutes_left: Some(5.0),
+                    text: "5 MIN LEFT".into(),
                 },
             ],
         }
@@ -93,42 +117,42 @@ impl Default for Config {
 impl Default for OcrConfig {
     fn default() -> Self {
         Self {
-            attivo: true,
+            enabled: true,
             monitor: 0,
             x: 0.85,
             y: 0.88,
-            larghezza: 0.15,
-            altezza: 0.12,
-            intervallo_ms: 250,
-            ingrandimento: 3,
-            salva_debug: false,
+            width: 0.15,
+            height: 0.12,
+            interval_ms: 250,
+            magnification: 3,
+            save_debug: false,
         }
     }
 }
 
 impl Config {
     pub fn durata_secondi(&self) -> f32 {
-        self.durata_minuti * 60.0
+        self.duration_minutes * 60.0
     }
 
     /// Corregge valori impossibili invece di far fallire l'avvio sul palco.
     fn normalizza(mut self) -> Self {
-        self.durata_minuti = self.durata_minuti.max(1.0);
-        self.domande_minuti = self.domande_minuti.max(0.0);
-        self.tolleranza_secondi = self.tolleranza_secondi.max(0.0);
-        self.panico_secondi = self.panico_secondi.max(self.tolleranza_secondi + 1.0);
-        self.scala = self.scala.clamp(0.5, 3.0);
-        self.opacita_sfondo = self.opacita_sfondo.clamp(0.0, 1.0);
-        self.opacita = self.opacita.clamp(0.15, 1.0);
+        self.duration_minutes = self.duration_minutes.max(1.0);
+        self.questions_minutes = self.questions_minutes.max(0.0);
+        self.tolerance_seconds = self.tolerance_seconds.max(0.0);
+        self.panic_seconds = self.panic_seconds.max(self.tolerance_seconds + 1.0);
+        self.scale = self.scale.clamp(0.5, 3.0);
+        self.background_opacity = self.background_opacity.clamp(0.0, 1.0);
+        self.opacity = self.opacity.clamp(0.15, 1.0);
         let o = &mut self.ocr;
         o.x = o.x.clamp(0.0, 0.99);
         o.y = o.y.clamp(0.0, 0.99);
         // min/max invece di clamp: con x = 0.99 il limite superiore può
         // risultare più piccolo di quello inferiore per gli arrotondamenti.
-        o.larghezza = o.larghezza.min(1.0 - o.x).max(0.005);
-        o.altezza = o.altezza.min(1.0 - o.y).max(0.005);
-        o.intervallo_ms = o.intervallo_ms.max(100);
-        o.ingrandimento = o.ingrandimento.clamp(1, 6);
+        o.width = o.width.min(1.0 - o.x).max(0.005);
+        o.height = o.height.min(1.0 - o.y).max(0.005);
+        o.interval_ms = o.interval_ms.max(100);
+        o.magnification = o.magnification.clamp(1, 6);
         self
     }
 }
@@ -198,33 +222,39 @@ mod tests {
     fn il_template_corrisponde_ai_default() {
         let da_file = da_testo(TEMPLATE).expect("il template deve essere valido");
         let def = Config::default().normalizza();
-        assert_eq!(da_file.durata_minuti, def.durata_minuti);
-        assert_eq!(da_file.totale_slide, def.totale_slide);
-        assert_eq!(da_file.posizione, def.posizione);
+        assert_eq!(da_file.duration_minutes, def.duration_minutes);
+        assert_eq!(da_file.total_slides, def.total_slides);
+        assert_eq!(da_file.position, def.position);
         assert_eq!(da_file.ocr.x, def.ocr.x);
-        assert_eq!(da_file.ocr.intervallo_ms, def.ocr.intervallo_ms);
+        assert_eq!(da_file.ocr.interval_ms, def.ocr.interval_ms);
         assert_eq!(da_file.milestone, def.milestone);
     }
 
     #[test]
     fn file_parziale_usa_i_default() {
-        let c = da_testo("durata_minuti = 45\n").unwrap();
-        assert_eq!(c.durata_minuti, 45.0);
-        assert_eq!(c.totale_slide, 30);
-        assert!(c.ocr.attivo);
+        let c = da_testo("duration_minutes = 45\n").unwrap();
+        assert_eq!(c.duration_minutes, 45.0);
+        assert_eq!(c.total_slides, 30);
+        assert!(c.ocr.enabled);
+
+        // Verifica retrocompatibilità parametri in italiano (alias)
+        let c_it = da_testo("durata_minuti = 45\ntotale_slide = 25\n").unwrap();
+        assert_eq!(c_it.duration_minutes, 45.0);
+        assert_eq!(c_it.total_slides, 25);
     }
 
     #[test]
     fn chiave_sconosciuta_e_un_errore() {
         assert!(da_testo("durata_minuto = 45\n").is_err());
+        assert!(da_testo("unknown_key = 45\n").is_err());
     }
 
     #[test]
     fn valori_assurdi_vengono_corretti() {
-        let c = da_testo("durata_minuti = 0\nscala = 100\n[ocr]\nx = 2.0\n").unwrap();
-        assert_eq!(c.durata_minuti, 1.0);
-        assert_eq!(c.scala, 3.0);
-        assert!(c.ocr.x + c.ocr.larghezza <= 1.0 + 1e-6);
-        assert!(c.ocr.larghezza > 0.0);
+        let c = da_testo("duration_minutes = 0\nscale = 100\n[ocr]\nx = 2.0\n").unwrap();
+        assert_eq!(c.duration_minutes, 1.0);
+        assert_eq!(c.scale, 3.0);
+        assert!(c.ocr.x + c.ocr.width <= 1.0 + 1e-6);
+        assert!(c.ocr.width > 0.0);
     }
 }
