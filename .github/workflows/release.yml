@@ -121,7 +121,7 @@ jobs:
       - name: Checksum
         run: cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ env.TAG }}
           name: Ritardometro ${{ env.TAG }}
