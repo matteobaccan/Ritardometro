@@ -323,6 +323,9 @@ pub struct Ritardometro {
     /// Falso se il file di configurazione non è leggibile: riscriverlo
     /// cancellerebbe quello che c'è dentro.
     salvabile: bool,
+    /// Chiavi imposte dalla riga di comando: valgono per questa esecuzione ma
+    /// non vanno scritte nel file.
+    da_cli: Vec<&'static str>,
     /// Rettangolo fisico della finestra, per ricordarne la posizione.
     rect_finestra: Option<(i32, i32, i32, i32)>,
 
@@ -350,12 +353,23 @@ pub struct Ritardometro {
 
     menu_aperto: bool,
     menu_pos: Option<Pos2>,
+    scheda: Scheda,
     num_monitor: usize,
     evidenzia_ocr: Option<(Instant, ocr::InfoZonaOcr)>,
 
     nascita: Instant,
     /// Modalità demo: simula un talk a velocità accelerata.
     demo: Option<Instant>,
+}
+
+/// Le schede del menu di configurazione.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum Scheda {
+    #[default]
+    Talk,
+    Overlay,
+    Ocr,
+    Milestone,
 }
 
 /// Da dove arriva il numero di slide. L'OCR può smettere di confermarlo (un
@@ -368,31 +382,48 @@ enum FonteSlide {
 
 /// Le impostazioni che si possono cambiare dal menu (più la posizione della
 /// finestra): quando questa istantanea cambia, il file va riscritto.
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, PartialEq)]
 struct Preferenze {
-    scala: f32,
-    sfondo: f32,
-    opacita: f32,
-    ocr_attivo: bool,
-    monitor: usize,
-    zona_automatica: bool,
-    intervallo_ms: u64,
-    debug: bool,
+    talk: (f32, f32, u32, bool, f32, f32, f32),
+    aspetto: (f32, f32, f32, Posizione, f32),
+    ocr: (bool, usize, bool, f32, f32, f32, f32, u64, u32, bool),
     finestra: Option<FinestraSalvata>,
+    milestone: Vec<crate::config::MilestoneConfig>,
 }
 
 impl Preferenze {
     fn da(cfg: &Config) -> Self {
         Self {
-            scala: cfg.scale,
-            sfondo: cfg.background_opacity,
-            opacita: cfg.opacity,
-            ocr_attivo: cfg.ocr.enabled,
-            monitor: cfg.ocr.monitor,
-            zona_automatica: cfg.ocr.auto_zone,
-            intervallo_ms: cfg.ocr.interval_ms,
-            debug: cfg.ocr.save_debug,
+            talk: (
+                cfg.duration_minutes,
+                cfg.questions_minutes,
+                cfg.total_slides,
+                cfg.auto_start,
+                cfg.tolerance_seconds,
+                cfg.panic_seconds,
+                cfg.stuck_factor,
+            ),
+            aspetto: (
+                cfg.scale,
+                cfg.background_opacity,
+                cfg.opacity,
+                cfg.position,
+                cfg.margin,
+            ),
+            ocr: (
+                cfg.ocr.enabled,
+                cfg.ocr.monitor,
+                cfg.ocr.auto_zone,
+                cfg.ocr.x,
+                cfg.ocr.y,
+                cfg.ocr.width,
+                cfg.ocr.height,
+                cfg.ocr.interval_ms,
+                cfg.ocr.magnification,
+                cfg.ocr.save_debug,
+            ),
             finestra: cfg.window,
+            milestone: cfg.milestone.clone(),
         }
     }
 }
@@ -420,6 +451,7 @@ impl Ritardometro {
             percorso,
             avviso,
             salvabile,
+            da_cli,
         } = caricata;
 
         let ocr_condiviso = Arc::new(Mutex::new(StatoOcrCondiviso {
@@ -471,6 +503,7 @@ impl Ritardometro {
             preferenze: Preferenze::da(&cfg_iniziale),
             salva_da: None,
             salvabile,
+            da_cli,
             rect_finestra: None,
             schermo_rx,
             ultimo_cambio: Instant::now(),
@@ -489,6 +522,7 @@ impl Ritardometro {
             trascinato_appena: false,
             menu_aperto: false,
             menu_pos: None,
+            scheda: Scheda::default(),
             num_monitor: ocr::numero_monitor(),
             evidenzia_ocr: None,
             nascita: Instant::now(),
@@ -685,7 +719,7 @@ impl Ritardometro {
 
     fn scrivi_config(&mut self) {
         self.salva_da = None;
-        if let Err(e) = crate::config::salva(&self.percorso_config, &self.cfg) {
+        if let Err(e) = crate::config::salva(&self.percorso_config, &self.cfg, &self.da_cli) {
             self.avviso = Some(e);
         }
     }
@@ -943,7 +977,7 @@ impl Ritardometro {
             return;
         }
 
-        let dim_menu = Vec2::new(380.0, 645.0);
+        let dim_menu = Vec2::new(430.0, 600.0);
         let mut builder = egui::ViewportBuilder::default()
             .with_title(concat!("Ritardometro v", env!("CARGO_PKG_VERSION"), " — Settings"))
             .with_inner_size(dim_menu)
@@ -980,6 +1014,7 @@ impl Ritardometro {
     }
 
     fn disegna_contenuto_menu(&mut self, ui: &mut egui::Ui, ctx_root: &egui::Context) {
+        // ---- testa fissa: i comandi che servono mentre si parla ----
         ui.horizontal(|ui| {
             let etichetta = if self.crono.in_corso() {
                 "Pause (space)"
@@ -992,217 +1027,64 @@ impl Ritardometro {
             if ui.button("Reset (R)").clicked() {
                 self.azzera();
             }
+            ui.separator();
+            ui.label("Time:");
+            if ui.button("−1").clicked() {
+                self.crono.correggi(-60.0);
+            }
+            if ui.button("+1").clicked() {
+                self.crono.correggi(60.0);
+            }
+            ui.separator();
+            ui.label("Slide:");
+            if ui.button("−1").clicked() {
+                let s = self.slide_letta.unwrap_or(2).saturating_sub(1).max(1);
+                self.imposta_slide(s, FonteSlide::Manuale);
+            }
+            if ui.button("+1").clicked() {
+                let s = self.slide_letta.unwrap_or(0) + 1;
+                self.imposta_slide(s, FonteSlide::Manuale);
+            }
+            if let Some(sl) = self.slide() {
+                ui.label(format!("({sl}/{})", self.totale().unwrap_or(0)));
+            }
         });
 
         ui.separator();
 
-        egui::Grid::new("griglia_controlli")
-            .num_columns(2)
-            .spacing([12.0, 8.0])
-            .show(ui, |ui| {
-                ui.label("Time:");
-                ui.horizontal(|ui| {
-                    if ui.button("-1 min").clicked() {
-                        self.crono.correggi(-60.0);
-                    }
-                    if ui.button("+1 min").clicked() {
-                        self.crono.correggi(60.0);
-                    }
-                });
-                ui.end_row();
-
-                ui.label("Slide:");
-                ui.horizontal(|ui| {
-                    if ui.button("-1").clicked() {
-                        let s = self.slide_letta.unwrap_or(2).saturating_sub(1).max(1);
-                        self.imposta_slide(s, FonteSlide::Manuale);
-                    }
-                    if ui.button("+1").clicked() {
-                        let s = self.slide_letta.unwrap_or(0) + 1;
-                        self.imposta_slide(s, FonteSlide::Manuale);
-                    }
-                    if let Some(sl) = self.slide() {
-                        ui.label(format!("({sl}/{})", self.totale().unwrap_or(0)));
-                    }
-                });
-                ui.end_row();
-
-                ui.label(format!("Size ({:.0}%):", self.cfg.scale * 100.0));
-                ui.horizontal(|ui| {
-                    if ui.button(" - ").clicked() {
-                        self.cambia_scala(ctx_root, self.cfg.scale - 0.15);
-                    }
-                    if ui.button(" + ").clicked() {
-                        self.cambia_scala(ctx_root, self.cfg.scale + 0.15);
-                    }
-                    if ui.button("100%").clicked() {
-                        self.cambia_scala(ctx_root, 1.0);
-                    }
-                });
-                ui.end_row();
-
-                ui.label("OCR:");
-                if ui
-                    .checkbox(
-                        &mut self.cfg.ocr.enabled,
-                        "Read the slide counter from the screen",
-                    )
-                    .on_hover_text(
-                        "Off = plain timer. The slide number can still be stepped \
-                         with the ← → arrow keys",
-                    )
-                    .changed()
-                {
-                    self.sincronizza_ocr_condiviso();
-                    if self.cfg.ocr.enabled {
-                        self.accendi_ocr(ctx_root);
-                    } else {
-                        self.stato_ocr = "OCR disabled: timer only".to_string();
-                        // Senza OCR quel numero non si aggiorna più: tenerlo
-                        // significherebbe calcolare un ritardo su un dato morto.
-                        if matches!(self.fonte_slide, Some(FonteSlide::Ocr(_))) {
-                            self.slide_letta = None;
-                            self.fonte_slide = None;
-                        }
-                    }
+        // ---- linguette ----
+        ui.horizontal(|ui| {
+            for (scheda, nome) in [
+                (Scheda::Talk, "Talk"),
+                (Scheda::Overlay, "Overlay"),
+                (Scheda::Ocr, "OCR"),
+                (Scheda::Milestone, "Milestones"),
+            ] {
+                if ui.selectable_label(self.scheda == scheda, nome).clicked() {
+                    self.scheda = scheda;
                 }
-                ui.end_row();
+            }
+        });
 
-                // Riga 1: Auto
-                ui.label("OCR Monitor:");
-                if ui
-                    .selectable_label(self.cfg.ocr.monitor == 0, "Auto (follows Ritardometro)")
-                    .clicked()
-                {
-                    self.cfg.ocr.monitor = 0;
-                    self.sincronizza_ocr_condiviso();
-                    self.avvia_evidenziazione_ocr();
-                    ctx_root.request_repaint();
-                }
-                ui.end_row();
+        ui.separator();
 
-                // Riga 2: I monitor trovati
-                ui.label("Detected Displays:");
-                ui.horizontal(|ui| {
-                    for idx in 1..=self.num_monitor.max(1) {
-                        let nome = format!("Mon {idx}");
-                        if ui.selectable_label(self.cfg.ocr.monitor == idx, nome).clicked() {
-                            self.cfg.ocr.monitor = idx;
-                            self.sincronizza_ocr_condiviso();
-                            self.avvia_evidenziazione_ocr();
-                            ctx_root.request_repaint();
-                        }
-                    }
-                });
-                ui.end_row();
-
-                // Riga 3: Mostra zona
-                ui.label("");
-                if ui
-                    .button("Highlight OCR Zone on Screen")
-                    .on_hover_text("Flashes a spotlight rectangle over the captured slide counter area")
-                    .clicked()
-                {
-                    self.avvia_evidenziazione_ocr();
-                    ctx_root.request_repaint();
-                }
-                ui.end_row();
-
-                ui.label("Auto-detect:");
-                if ui
-                    .checkbox(
-                        &mut self.cfg.ocr.auto_zone,
-                        "Find the slide counter in any corner",
-                    )
-                    .on_hover_text(
-                        "If the configured area reads nothing for a few seconds, scan the other \
-                         corners and lock onto the one showing the slide counter",
-                    )
-                    .changed()
-                {
-                    if !self.cfg.ocr.auto_zone {
-                        self.zona_ocr = None;
-                    }
-                    self.sincronizza_ocr_condiviso();
-                    self.avvia_evidenziazione_ocr();
-                    ctx_root.request_repaint();
-                }
-                ui.end_row();
-
-                ui.label("OCR Rate:");
-                ui.horizontal(|ui| {
-                    for (ms, etichetta) in [(200_u64, "200 ms (fast)"), (350, "350 ms"), (500, "500 ms")] {
-                        if ui
-                            .selectable_label(self.cfg.ocr.interval_ms == ms, etichetta)
-                            .clicked()
-                        {
-                            self.cfg.ocr.interval_ms = ms;
-                            self.sincronizza_ocr_condiviso();
-                        }
-                    }
-                });
-                ui.end_row();
+        // ---- corpo: una scheda per volta, con il piede sempre visibile ----
+        const ALTEZZA_PIEDE: f32 = 64.0;
+        let disponibile = (ui.available_height() - ALTEZZA_PIEDE).max(140.0);
+        let scheda = self.scheda;
+        egui::ScrollArea::vertical()
+            .max_height(disponibile)
+            .auto_shrink([false, false])
+            .show(ui, |ui| match scheda {
+                Scheda::Talk => self.scheda_talk(ui, ctx_root),
+                Scheda::Overlay => self.scheda_overlay(ui, ctx_root),
+                Scheda::Ocr => self.scheda_ocr(ui, ctx_root),
+                Scheda::Milestone => self.scheda_milestone(ui),
             });
 
-        if ui
-            .checkbox(
-                &mut self.cfg.ocr.save_debug,
-                "Save ritardometro-debug.png (OCR calibration)",
-            )
-            .changed()
-        {
-            self.sincronizza_ocr_condiviso();
-        }
-
         ui.separator();
 
-        ui.label(egui::RichText::new("Transparency").strong());
-        let mut op_sfondo_pct = (self.cfg.background_opacity * 100.0).round();
-        ui.horizontal(|ui| {
-            ui.label("Background:");
-            if ui
-                .add(
-                    egui::Slider::new(&mut op_sfondo_pct, 0.0..=100.0)
-                        .suffix("%")
-                        .fixed_decimals(0),
-                )
-                .changed()
-            {
-                self.cfg.background_opacity = (op_sfondo_pct / 100.0).clamp(0.0, 1.0);
-                ctx_root.request_repaint();
-            }
-        });
-
-        let mut op_tot_pct = (self.cfg.opacity * 100.0).round();
-        ui.horizontal(|ui| {
-            ui.label("Avatar & Text:");
-            if ui
-                .add(
-                    egui::Slider::new(&mut op_tot_pct, 15.0..=100.0)
-                        .suffix("%")
-                        .fixed_decimals(0),
-                )
-                .changed()
-            {
-                self.cfg.opacity = (op_tot_pct / 100.0).clamp(0.15, 1.0);
-                ctx_root.request_repaint();
-            }
-        });
-
-        ui.separator();
-
-        if ui.button("Open Configuration File").clicked() {
-            apri_file(&self.percorso_config);
-            self.menu_aperto = false;
-        }
-        ui.label(
-            egui::RichText::new("changes here are saved automatically · restart after editing the .toml by hand")
-                .small()
-                .color(Color32::from_rgb(195, 200, 215)),
-        );
-
-        ui.separator();
-
+        // ---- piede fisso ----
         ui.horizontal_wrapped(|ui| {
             ui.label(
                 egui::RichText::new(format!("Ritardometro v{}", env!("CARGO_PKG_VERSION")))
@@ -1215,10 +1097,12 @@ impl Ritardometro {
             {
                 apri_url(env!("CARGO_PKG_REPOSITORY"));
             }
+            ui.label(
+                egui::RichText::new("· changes are saved automatically")
+                    .small()
+                    .color(Color32::from_rgb(195, 200, 215)),
+            );
         });
-
-        ui.separator();
-
         ui.horizontal(|ui| {
             if ui.button("Close Menu").clicked() {
                 self.menu_aperto = false;
@@ -1229,6 +1113,459 @@ impl Ritardometro {
                 }
             });
         });
+    }
+
+    /// Tutto quello che riguarda il talk: quanto dura e quando preoccuparsi.
+    fn scheda_talk(&mut self, ui: &mut egui::Ui, ctx_root: &egui::Context) {
+        let durata_prima = self.cfg.duration_minutes;
+        let fattore_prima = self.cfg.stuck_factor;
+
+        egui::Grid::new("scheda_talk")
+            .num_columns(2)
+            .spacing([12.0, 8.0])
+            .show(ui, |ui| {
+                ui.label("Talk duration:");
+                ui.add(
+                    egui::DragValue::new(&mut self.cfg.duration_minutes)
+                        .speed(0.5)
+                        .range(1.0..=600.0)
+                        .suffix(" min"),
+                );
+                ui.end_row();
+
+                ui.label("Questions:");
+                ui.add(
+                    egui::DragValue::new(&mut self.cfg.questions_minutes)
+                        .speed(0.5)
+                        .range(0.0..=180.0)
+                        .suffix(" min"),
+                )
+                .on_hover_text("Countdown after the talk. 0 = no question time");
+                ui.end_row();
+
+                ui.label("Total slides:");
+                ui.add(
+                    egui::DragValue::new(&mut self.cfg.total_slides)
+                        .speed(1.0)
+                        .range(0..=999),
+                )
+                .on_hover_text("0 = take the total from the counter on screen (\"12 / 40\")");
+                ui.end_row();
+
+                ui.label("Auto start:");
+                ui.checkbox(
+                    &mut self.cfg.auto_start,
+                    "start the timer on the first slide change",
+                );
+                ui.end_row();
+
+                ui.label("On track within:");
+                ui.add(
+                    egui::DragValue::new(&mut self.cfg.tolerance_seconds)
+                        .speed(1.0)
+                        .range(0.0..=900.0)
+                        .suffix(" s"),
+                )
+                .on_hover_text("Inside this gap the avatar stays happy");
+                ui.end_row();
+
+                ui.label("Panic after:");
+                ui.add(
+                    egui::DragValue::new(&mut self.cfg.panic_seconds)
+                        .speed(1.0)
+                        .range(1.0..=1800.0)
+                        .suffix(" s"),
+                )
+                .on_hover_text("Behind by this much and the avatar starts sweating");
+                ui.end_row();
+
+                ui.label("Dwell watch:");
+                ui.add(
+                    egui::DragValue::new(&mut self.cfg.stuck_factor)
+                        .speed(0.1)
+                        .range(0.0..=10.0)
+                        .suffix("× slide"),
+                )
+                .on_hover_text(
+                    "No slide counter: show the pulsing watch when the screen has not \
+                     changed for this many times the average slide. 0 = never watch the screen",
+                );
+                ui.end_row();
+            });
+
+        // Il panico deve restare oltre la tolleranza, altrimenti non scatta mai.
+        self.cfg.panic_seconds = self.cfg.panic_seconds.max(self.cfg.tolerance_seconds + 1.0);
+        if self.cfg.stuck_factor > 0.0 {
+            self.cfg.stuck_factor = self.cfg.stuck_factor.max(1.0);
+        }
+        // Le milestone sono risolte in secondi: cambiata la durata, vanno rifatte.
+        if self.cfg.duration_minutes != durata_prima {
+            self.ricalcola_milestone();
+        }
+        if fattore_prima <= 0.0 && self.cfg.stuck_factor > 0.0 {
+            self.accendi_schermo(ctx_root);
+        }
+    }
+
+    /// Aspetto e posizione della finestra.
+    fn scheda_overlay(&mut self, ui: &mut egui::Ui, ctx_root: &egui::Context) {
+        egui::Grid::new("scheda_overlay")
+            .num_columns(2)
+            .spacing([12.0, 8.0])
+            .show(ui, |ui| {
+                ui.label(format!("Size ({:.0}%):", self.cfg.scale * 100.0));
+                ui.horizontal(|ui| {
+                    if ui.button(" − ").clicked() {
+                        self.cambia_scala(ctx_root, self.cfg.scale - 0.15);
+                    }
+                    if ui.button(" + ").clicked() {
+                        self.cambia_scala(ctx_root, self.cfg.scale + 0.15);
+                    }
+                    if ui.button("100%").clicked() {
+                        self.cambia_scala(ctx_root, 1.0);
+                    }
+                });
+                ui.end_row();
+
+                let mut sfondo = (self.cfg.background_opacity * 100.0).round();
+                ui.label("Background:");
+                if ui
+                    .add(
+                        egui::Slider::new(&mut sfondo, 0.0..=100.0)
+                            .suffix("%")
+                            .fixed_decimals(0),
+                    )
+                    .changed()
+                {
+                    self.cfg.background_opacity = (sfondo / 100.0).clamp(0.0, 1.0);
+                    ctx_root.request_repaint();
+                }
+                ui.end_row();
+
+                let mut avatar = (self.cfg.opacity * 100.0).round();
+                ui.label("Avatar & text:");
+                if ui
+                    .add(
+                        egui::Slider::new(&mut avatar, 15.0..=100.0)
+                            .suffix("%")
+                            .fixed_decimals(0),
+                    )
+                    .changed()
+                {
+                    self.cfg.opacity = (avatar / 100.0).clamp(0.15, 1.0);
+                    ctx_root.request_repaint();
+                }
+                ui.end_row();
+
+                ui.label("Start corner:");
+                ui.horizontal(|ui| {
+                    for p in Posizione::TUTTE {
+                        if ui
+                            .selectable_label(self.cfg.position == p, p.nome())
+                            .clicked()
+                        {
+                            self.cfg.position = p;
+                        }
+                    }
+                });
+                ui.end_row();
+
+                ui.label("Margin:");
+                ui.add(
+                    egui::DragValue::new(&mut self.cfg.margin)
+                        .speed(1.0)
+                        .range(0.0..=300.0)
+                        .suffix(" pt"),
+                )
+                .on_hover_text("Distance from the screen edge when the overlay is placed");
+                ui.end_row();
+
+                ui.label("Window:");
+                if ui
+                    .button("Move back to the corner")
+                    .on_hover_text(
+                        "Forget where the window was dragged and place it again in the corner",
+                    )
+                    .clicked()
+                {
+                    self.cfg.window = None;
+                    self.posizionato = false;
+                    ctx_root.request_repaint();
+                }
+                ui.end_row();
+            });
+    }
+
+    /// Lettura del contatore di slide dallo schermo.
+    fn scheda_ocr(&mut self, ui: &mut egui::Ui, ctx_root: &egui::Context) {
+        egui::Grid::new("scheda_ocr")
+            .num_columns(2)
+            .spacing([12.0, 8.0])
+            .show(ui, |ui| {
+                ui.label("OCR:");
+                if ui
+                    .checkbox(
+                        &mut self.cfg.ocr.enabled,
+                        "read the slide counter from the screen",
+                    )
+                    .on_hover_text(
+                        "Off = plain timer. The slide number can still be stepped \
+                         with the ← → arrow keys",
+                    )
+                    .changed()
+                {
+                    self.sincronizza_ocr_condiviso();
+                    if self.cfg.ocr.enabled {
+                        self.accendi_ocr(ctx_root);
+                    } else {
+                        self.stato_ocr = "OCR disabled: timer only".to_string();
+                        if matches!(self.fonte_slide, Some(FonteSlide::Ocr(_))) {
+                            self.slide_letta = None;
+                            self.fonte_slide = None;
+                        }
+                    }
+                }
+                ui.end_row();
+
+                ui.label("Monitor:");
+                ui.horizontal(|ui| {
+                    if ui
+                        .selectable_label(self.cfg.ocr.monitor == 0, "Auto")
+                        .on_hover_text("Follow the display the Ritardometro is on")
+                        .clicked()
+                    {
+                        self.cfg.ocr.monitor = 0;
+                        self.sincronizza_ocr_condiviso();
+                        self.avvia_evidenziazione_ocr();
+                    }
+                    for idx in 1..=self.num_monitor.max(1) {
+                        if ui
+                            .selectable_label(self.cfg.ocr.monitor == idx, format!("Mon {idx}"))
+                            .clicked()
+                        {
+                            self.cfg.ocr.monitor = idx;
+                            self.sincronizza_ocr_condiviso();
+                            self.avvia_evidenziazione_ocr();
+                        }
+                    }
+                });
+                ui.end_row();
+
+                ui.label("Auto-detect:");
+                if ui
+                    .checkbox(&mut self.cfg.ocr.auto_zone, "find the counter in any corner")
+                    .on_hover_text(
+                        "If the area below reads nothing for a few seconds, scan the other \
+                         corners and lock onto the one showing the counter",
+                    )
+                    .changed()
+                {
+                    if !self.cfg.ocr.auto_zone {
+                        self.zona_ocr = None;
+                    }
+                    self.sincronizza_ocr_condiviso();
+                    self.avvia_evidenziazione_ocr();
+                }
+                ui.end_row();
+
+                ui.label("Capture area:");
+                ui.horizontal(|ui| {
+                    let mut cambiata = false;
+                    for (etichetta, valore) in [
+                        ("x", &mut self.cfg.ocr.x),
+                        ("y", &mut self.cfg.ocr.y),
+                        ("w", &mut self.cfg.ocr.width),
+                        ("h", &mut self.cfg.ocr.height),
+                    ] {
+                        let mut pct = *valore * 100.0;
+                        if ui
+                            .add(
+                                egui::DragValue::new(&mut pct)
+                                    .speed(0.5)
+                                    .range(0.5..=100.0)
+                                    .max_decimals(0)
+                                    .prefix(format!("{etichetta} "))
+                                    .suffix("%"),
+                            )
+                            .changed()
+                        {
+                            *valore = pct / 100.0;
+                            cambiata = true;
+                        }
+                    }
+                    if cambiata {
+                        let o = &mut self.cfg.ocr;
+                        o.x = o.x.clamp(0.0, 0.99);
+                        o.y = o.y.clamp(0.0, 0.99);
+                        o.width = o.width.min(1.0 - o.x).max(0.005);
+                        o.height = o.height.min(1.0 - o.y).max(0.005);
+                        self.sincronizza_ocr_condiviso();
+                        self.avvia_evidenziazione_ocr();
+                    }
+                });
+                ui.end_row();
+
+                ui.label("");
+                if ui
+                    .button("Highlight the zone on screen")
+                    .on_hover_text("Flash a spotlight over the area being captured")
+                    .clicked()
+                {
+                    self.avvia_evidenziazione_ocr();
+                    ctx_root.request_repaint();
+                }
+                ui.end_row();
+
+                ui.label("Rate:");
+                ui.horizontal(|ui| {
+                    for (ms, etichetta) in
+                        [(200_u64, "200 ms"), (350, "350 ms"), (500, "500 ms")]
+                    {
+                        if ui
+                            .selectable_label(self.cfg.ocr.interval_ms == ms, etichetta)
+                            .clicked()
+                        {
+                            self.cfg.ocr.interval_ms = ms;
+                            self.sincronizza_ocr_condiviso();
+                        }
+                    }
+                });
+                ui.end_row();
+
+                ui.label("Magnification:");
+                if ui
+                    .add(
+                        egui::DragValue::new(&mut self.cfg.ocr.magnification)
+                            .speed(1.0)
+                            .range(1..=6)
+                            .suffix("×"),
+                    )
+                    .on_hover_text("Small counters are recognised much better when enlarged")
+                    .changed()
+                {
+                    self.sincronizza_ocr_condiviso();
+                }
+                ui.end_row();
+
+                ui.label("Debug:");
+                if ui
+                    .checkbox(
+                        &mut self.cfg.ocr.save_debug,
+                        "save ritardometro-debug.png on every capture",
+                    )
+                    .changed()
+                {
+                    self.sincronizza_ocr_condiviso();
+                }
+                ui.end_row();
+            });
+    }
+
+    /// Le bandierine: un fumetto che compare a un certo punto del talk.
+    fn scheda_milestone(&mut self, ui: &mut egui::Ui) {
+        let mut cambiate = false;
+        let mut da_togliere = None;
+
+        for (i, m) in self.cfg.milestone.iter_mut().enumerate() {
+            ui.horizontal(|ui| {
+                let a_percentuale = m.percentage.is_some();
+                if ui
+                    .selectable_label(a_percentuale, "at %")
+                    .on_hover_text("Fires at a percentage of the talk")
+                    .clicked()
+                    && !a_percentuale
+                {
+                    m.percentage = Some(50.0);
+                    m.minutes_left = None;
+                    cambiate = true;
+                }
+                if ui
+                    .selectable_label(!a_percentuale, "min left")
+                    .on_hover_text("Fires when this many minutes are left")
+                    .clicked()
+                    && a_percentuale
+                {
+                    m.minutes_left = Some(5.0);
+                    m.percentage = None;
+                    cambiate = true;
+                }
+
+                if let Some(p) = m.percentage.as_mut() {
+                    cambiate |= ui
+                        .add(
+                            egui::DragValue::new(p)
+                                .speed(1.0)
+                                .range(1.0..=99.0)
+                                .suffix("%"),
+                        )
+                        .changed();
+                } else if let Some(min) = m.minutes_left.as_mut() {
+                    cambiate |= ui
+                        .add(
+                            egui::DragValue::new(min)
+                                .speed(0.5)
+                                .range(0.5..=600.0)
+                                .suffix(" min"),
+                        )
+                        .changed();
+                }
+
+                cambiate |= ui
+                    .add(
+                        egui::TextEdit::singleline(&mut m.text)
+                            .desired_width(130.0)
+                            .char_limit(24)
+                            .hint_text("balloon text"),
+                    )
+                    .changed();
+
+                if ui.button("✕").on_hover_text("Remove").clicked() {
+                    da_togliere = Some(i);
+                }
+            });
+        }
+
+        if let Some(i) = da_togliere {
+            self.cfg.milestone.remove(i);
+            cambiate = true;
+        }
+
+        ui.add_space(4.0);
+        if ui.button("+ Add milestone").clicked() {
+            self.cfg.milestone.push(crate::config::MilestoneConfig {
+                percentage: Some(50.0),
+                minutes_left: None,
+                text: "HALF WAY!".to_string(),
+            });
+            cambiate = true;
+        }
+        if self.cfg.milestone.is_empty() {
+            ui.label(
+                egui::RichText::new("No milestones: the avatar never raises a balloon.")
+                    .small()
+                    .color(GRIGIO),
+            );
+        }
+
+        if cambiate {
+            self.ricalcola_milestone();
+        }
+    }
+
+    /// Rifà la lista delle bandierine dai minuti/percentuali correnti.
+    fn ricalcola_milestone(&mut self) {
+        self.bandierine = Bandierine::new(pacing::risolvi_milestone(
+            &self.cfg.milestone,
+            self.cfg.durata_secondi(),
+        ));
+    }
+
+    /// Avvia la sorveglianza dello schermo quando viene accesa a programma già partito.
+    fn accendi_schermo(&mut self, ctx: &egui::Context) {
+        if self.schermo_rx.is_some() || self.demo.is_some() {
+            return;
+        }
+        self.schermo_rx = schermo::avvia(Arc::clone(&self.ocr_condiviso), ctx.clone()).ok();
     }
 
     fn avvia_evidenziazione_ocr(&mut self) {
@@ -2143,16 +2480,6 @@ fn accorcia(testo: &str, max: usize) -> String {
     }
 }
 
-fn apri_file(percorso: &std::path::Path) {
-    #[cfg(windows)]
-    let _ = std::process::Command::new("notepad").arg(percorso).spawn();
-    #[cfg(target_os = "macos")]
-    let _ = std::process::Command::new("open").arg(percorso).spawn();
-    #[cfg(all(unix, not(target_os = "macos")))]
-    let _ = std::process::Command::new("xdg-open").arg(percorso).spawn();
-}
-
-/// Apre un indirizzo web nel browser predefinito.
 fn apri_url(url: &str) {
     // explorer.exe apre l'URL nel browser predefinito senza far lampeggiare una console
     #[cfg(windows)]

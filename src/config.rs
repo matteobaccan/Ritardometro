@@ -67,6 +67,26 @@ pub enum Posizione {
     BottomRight,
 }
 
+impl Posizione {
+    /// Le quattro posizioni, nell'ordine in cui le mostra il menu.
+    pub const TUTTE: [Posizione; 4] = [
+        Posizione::TopLeft,
+        Posizione::TopRight,
+        Posizione::BottomLeft,
+        Posizione::BottomRight,
+    ];
+
+    /// Nome come appare nel file di configurazione.
+    pub fn nome(self) -> &'static str {
+        match self {
+            Posizione::TopLeft => "top-left",
+            Posizione::TopRight => "top-right",
+            Posizione::BottomLeft => "bottom-left",
+            Posizione::BottomRight => "bottom-right",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct OcrConfig {
@@ -192,6 +212,9 @@ pub struct Caricata {
     /// Falso quando il file esiste ma non si è riusciti a leggerlo o a
     /// interpretarlo: riscriverlo cancellerebbe la configurazione dell'utente.
     pub salvabile: bool,
+    /// Chiavi imposte dalla riga di comando per questa esecuzione: valgono
+    /// adesso, ma non vanno scritte nel file.
+    pub da_cli: Vec<&'static str>,
 }
 
 /// Percorso di default: `ritardometro.toml` accanto all'eseguibile.
@@ -218,6 +241,7 @@ pub fn carica(percorso: &Path) -> Caricata {
                 percorso: percorso.to_path_buf(),
                 avviso: None,
                 salvabile: true,
+                da_cli: Vec::new(),
             },
             Err(e) => Caricata {
                 config: Config::default(),
@@ -226,6 +250,7 @@ pub fn carica(percorso: &Path) -> Caricata {
                     "Error in config file, falling back to defaults:\n{e}"
                 )),
                 salvabile: false,
+                da_cli: Vec::new(),
             },
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -237,6 +262,7 @@ pub fn carica(percorso: &Path) -> Caricata {
                 percorso: percorso.to_path_buf(),
                 avviso: avviso.clone(),
                 salvabile: avviso.is_none(),
+                da_cli: Vec::new(),
             }
         }
         Err(e) => Caricata {
@@ -244,6 +270,7 @@ pub fn carica(percorso: &Path) -> Caricata {
             percorso: percorso.to_path_buf(),
             avviso: Some(format!("Could not read {}: {e}", percorso.display())),
             salvabile: false,
+            da_cli: Vec::new(),
         },
     }
 }
@@ -311,26 +338,113 @@ fn numero(v: f32) -> String {
         .to_string()
 }
 
-/// Applica al testo del file tutte le impostazioni modificabili dal menu.
-pub fn aggiorna_testo(testo: &str, cfg: &Config) -> String {
+/// Virgolette e caratteri speciali di un testo libero, in forma TOML.
+fn stringa_toml(valore: &str) -> String {
+    let mut out = String::with_capacity(valore.len() + 2);
+    out.push('"');
+    for c in valore.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Riscrive i blocchi `[[milestone]]`.
+///
+/// È una lista, non una chiave: non si può correggere riga per riga come le
+/// altre, quindi i blocchi esistenti vengono tolti e riscritti in fondo. I
+/// commenti che li precedono restano al loro posto; quelli scritti *dentro* un
+/// blocco no, ed è l'unico pezzo di file che il programma non sa conservare.
+fn imposta_milestone(testo: &str, lista: &[MilestoneConfig]) -> String {
+    let mut righe: Vec<&str> = Vec::new();
+    let mut dentro = false;
+    for riga in testo.lines() {
+        let t = riga.trim();
+        if t.starts_with('[') {
+            dentro = t == "[[milestone]]";
+            if dentro {
+                continue;
+            }
+        }
+        let chiave_lista =
+            !dentro && t.split_once('=').is_some_and(|(k, _)| k.trim() == "milestone");
+        if dentro || chiave_lista {
+            continue;
+        }
+        righe.push(riga);
+    }
+    let mut out = righe.join("\n");
+    while out.ends_with('\n') {
+        out.pop();
+    }
+    out.push('\n');
+
+    if lista.is_empty() {
+        // Senza la chiave esplicita, un file senza blocchi riprenderebbe le
+        // milestone di default: chi le ha tolte tutte le rivedrebbe comparire.
+        return imposta_chiave(&out, None, "milestone", "[]");
+    }
+    for m in lista {
+        out.push_str("\n[[milestone]]\n");
+        if let Some(p) = m.percentage {
+            out.push_str(&format!("percentage = {}\n", numero(p)));
+        } else if let Some(min) = m.minutes_left {
+            out.push_str(&format!("minutes_left = {}\n", numero(min)));
+        }
+        out.push_str(&format!("text = {}\n", stringa_toml(&m.text)));
+    }
+    out
+}
+
+/// Applica al testo del file tutte le impostazioni modificabili dal menu,
+/// che da quando il menu le copre tutte vuol dire: tutte.
+///
+/// `salta` elenca le chiavi da lasciare come stanno nel file: ci finiscono
+/// quelle imposte per questa sola esecuzione dalla riga di comando, che non
+/// devono diventare la nuova configurazione permanente.
+pub fn aggiorna_testo(testo: &str, cfg: &Config, salta: &[&str]) -> String {
     let mut t = testo.to_string();
     for (sezione, chiave, valore) in [
+        (None, "duration_minutes", numero(cfg.duration_minutes)),
+        (None, "questions_minutes", numero(cfg.questions_minutes)),
+        (None, "total_slides", cfg.total_slides.to_string()),
+        (None, "auto_start", cfg.auto_start.to_string()),
+        (None, "tolerance_seconds", numero(cfg.tolerance_seconds)),
+        (None, "panic_seconds", numero(cfg.panic_seconds)),
+        (None, "stuck_factor", numero(cfg.stuck_factor)),
         (None, "scale", numero(cfg.scale)),
         (None, "background_opacity", numero(cfg.background_opacity)),
         (None, "opacity", numero(cfg.opacity)),
+        (None, "position", stringa_toml(cfg.position.nome())),
+        (None, "margin", numero(cfg.margin)),
         (Some("ocr"), "enabled", cfg.ocr.enabled.to_string()),
         (Some("ocr"), "monitor", cfg.ocr.monitor.to_string()),
         (Some("ocr"), "auto_zone", cfg.ocr.auto_zone.to_string()),
+        (Some("ocr"), "x", numero(cfg.ocr.x)),
+        (Some("ocr"), "y", numero(cfg.ocr.y)),
+        (Some("ocr"), "width", numero(cfg.ocr.width)),
+        (Some("ocr"), "height", numero(cfg.ocr.height)),
         (Some("ocr"), "interval_ms", cfg.ocr.interval_ms.to_string()),
+        (Some("ocr"), "magnification", cfg.ocr.magnification.to_string()),
         (Some("ocr"), "save_debug", cfg.ocr.save_debug.to_string()),
     ] {
+        if sezione.is_none() && salta.contains(&chiave) {
+            continue;
+        }
         t = imposta_chiave(&t, sezione, chiave, &valore);
     }
     if let Some(f) = cfg.window {
         t = imposta_chiave(&t, Some("window"), "x", &f.x.to_string());
         t = imposta_chiave(&t, Some("window"), "y", &f.y.to_string());
     }
-    t
+    imposta_milestone(&t, &cfg.milestone)
 }
 
 /// Salva le impostazioni nel file di configurazione, conservandone i commenti.
@@ -339,9 +453,9 @@ pub fn aggiorna_testo(testo: &str, cfg: &Config) -> String {
 /// mentre il programma è aperto non viene persa (vince comunque chi scrive per
 /// ultimo sulle chiavi in conflitto), e scrive su un file temporaneo che poi
 /// rinomina: un'interruzione a metà non lascia una configurazione monca.
-pub fn salva(percorso: &Path, cfg: &Config) -> Result<(), String> {
+pub fn salva(percorso: &Path, cfg: &Config, salta: &[&str]) -> Result<(), String> {
     let attuale = std::fs::read_to_string(percorso).unwrap_or_else(|_| TEMPLATE.to_string());
-    let nuovo = aggiorna_testo(&attuale, cfg);
+    let nuovo = aggiorna_testo(&attuale, cfg, salta);
     if nuovo == attuale {
         return Ok(());
     }
@@ -356,7 +470,123 @@ pub fn salva(percorso: &Path, cfg: &Config) -> Result<(), String> {
 mod tests {
     use super::*;
 
-#[test]
+fn config_personalizzata() -> Config {
+        Config {
+            duration_minutes: 45.0,
+            questions_minutes: 0.0,
+            total_slides: 64,
+            auto_start: false,
+            tolerance_seconds: 30.0,
+            panic_seconds: 120.0,
+            stuck_factor: 2.5,
+            scale: 1.45,
+            background_opacity: 0.0,
+            opacity: 0.8,
+            position: Posizione::BottomLeft,
+            margin: 8.0,
+            ocr: OcrConfig {
+                enabled: false,
+                monitor: 2,
+                auto_zone: false,
+                x: 0.1,
+                y: 0.05,
+                width: 0.25,
+                height: 0.2,
+                interval_ms: 500,
+                magnification: 5,
+                save_debug: true,
+            },
+            window: Some(FinestraSalvata { x: 100, y: 200 }),
+            milestone: vec![
+                MilestoneConfig {
+                    percentage: Some(25.0),
+                    minutes_left: None,
+                    text: "ONE QUARTER".into(),
+                },
+                MilestoneConfig {
+                    percentage: None,
+                    minutes_left: Some(2.5),
+                    text: "wrap it up \"now\"".into(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn ogni_impostazione_del_menu_torna_indietro_dal_file() {
+        let c = config_personalizzata();
+        let scritta = aggiorna_testo(TEMPLATE, &c, &[]);
+        let riletta = da_testo(&scritta).expect("il file deve restare valido");
+
+        assert_eq!(riletta.duration_minutes, c.duration_minutes);
+        assert_eq!(riletta.questions_minutes, c.questions_minutes);
+        assert_eq!(riletta.total_slides, c.total_slides);
+        assert_eq!(riletta.auto_start, c.auto_start);
+        assert_eq!(riletta.tolerance_seconds, c.tolerance_seconds);
+        assert_eq!(riletta.panic_seconds, c.panic_seconds);
+        assert_eq!(riletta.stuck_factor, c.stuck_factor);
+        assert_eq!(riletta.scale, c.scale);
+        assert_eq!(riletta.background_opacity, c.background_opacity);
+        assert_eq!(riletta.opacity, c.opacity);
+        assert_eq!(riletta.position, c.position);
+        assert_eq!(riletta.margin, c.margin);
+        assert_eq!(riletta.window, c.window);
+        assert_eq!(riletta.milestone, c.milestone);
+
+        let o = &riletta.ocr;
+        assert_eq!(o.enabled, c.ocr.enabled);
+        assert_eq!(o.monitor, c.ocr.monitor);
+        assert_eq!(o.auto_zone, c.ocr.auto_zone);
+        assert_eq!((o.x, o.y, o.width, o.height), (0.1, 0.05, 0.25, 0.2));
+        assert_eq!(o.interval_ms, c.ocr.interval_ms);
+        assert_eq!(o.magnification, c.ocr.magnification);
+        assert_eq!(o.save_debug, c.ocr.save_debug);
+
+        // e i commenti del template restano tutti al loro posto
+        for riga in TEMPLATE.lines().filter(|r| r.trim_start().starts_with('#')) {
+            assert!(scritta.lines().any(|r| r == riga), "commento perso: {riga}");
+        }
+    }
+
+    #[test]
+    fn le_chiavi_dalla_riga_di_comando_non_finiscono_nel_file() {
+        // `--minutes 45 --slides 64` vale per questa esecuzione, non per sempre
+        let c = config_personalizzata();
+        let t = aggiorna_testo(TEMPLATE, &c, &["duration_minutes", "total_slides"]);
+        let riletta = da_testo(&t).unwrap();
+        assert_eq!(riletta.duration_minutes, 30.0, "resta quella del file");
+        assert_eq!(riletta.total_slides, 30, "resta quella del file");
+        // tutto il resto viene salvato lo stesso
+        assert_eq!(riletta.scale, c.scale);
+        assert_eq!(riletta.position, c.position);
+    }
+
+    #[test]
+    fn le_milestone_si_riscrivono_senza_duplicarsi() {
+        let c = config_personalizzata();
+        let primo = aggiorna_testo(TEMPLATE, &c, &[]);
+        assert_eq!(primo.matches("[[milestone]]").count(), 2);
+        // un secondo salvataggio sullo stesso file non accumula blocchi
+        let secondo = aggiorna_testo(&primo, &c, &[]);
+        assert_eq!(secondo.matches("[[milestone]]").count(), 2);
+        let riletta = da_testo(&secondo).unwrap();
+        assert_eq!(riletta.milestone, c.milestone);
+        // il testo con le virgolette sopravvive al giro
+        assert_eq!(riletta.milestone[1].text, "wrap it up \"now\"");
+    }
+
+    #[test]
+    fn togliere_tutte_le_milestone_non_le_fa_ricomparire() {
+        let c = Config {
+            milestone: Vec::new(),
+            ..Config::default()
+        };
+        let t = aggiorna_testo(TEMPLATE, &c, &[]);
+        assert!(!t.contains("[[milestone]]"));
+        assert!(da_testo(&t).unwrap().milestone.is_empty());
+    }
+
+    #[test]
     fn salvare_non_tocca_commenti_e_altre_chiavi() {
         let c = Config {
             scale: 1.3,
@@ -367,7 +597,7 @@ mod tests {
             },
             ..Config::default()
         };
-        let nuovo = aggiorna_testo(TEMPLATE, &c);
+        let nuovo = aggiorna_testo(TEMPLATE, &c, &[]);
 
         // I commenti del template restano tutti
         for riga in TEMPLATE.lines().filter(|r| r.trim_start().starts_with('#')) {
@@ -420,7 +650,7 @@ mod tests {
             window: Some(FinestraSalvata { x: 1920, y: -40 }),
             ..Config::default()
         };
-        let t = aggiorna_testo(TEMPLATE, &c);
+        let t = aggiorna_testo(TEMPLATE, &c, &[]);
         assert!(t.contains("[window]"));
         let riletta = da_testo(&t).unwrap();
         assert_eq!(riletta.window, Some(FinestraSalvata { x: 1920, y: -40 }));
@@ -430,7 +660,7 @@ mod tests {
             window: Some(FinestraSalvata { x: 10, y: 20 }),
             ..riletta
         };
-        let t2 = aggiorna_testo(&t, &c2);
+        let t2 = aggiorna_testo(&t, &c2, &[]);
         assert_eq!(t2.matches("[window]").count(), 1);
         assert_eq!(
             da_testo(&t2).unwrap().window,
