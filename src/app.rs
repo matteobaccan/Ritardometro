@@ -1104,6 +1104,7 @@ impl Ritardometro {
                 egui::RichText::new(format!("Ritardometro v{}", env!("CARGO_PKG_VERSION")))
                     .strong(),
             );
+            ui.label("· By Matteo Baccan ·");
             if ui
                 .link("GitHub")
                 .on_hover_text(env!("CARGO_PKG_REPOSITORY"))
