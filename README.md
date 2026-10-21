@@ -38,6 +38,7 @@ Download the archive for your operating system from the [Releases page](https://
 
 > Automatic slide OCR detection runs natively on Windows via `Windows.Media.Ocr`. On Linux and macOS, Ritardometro works as a full-featured pacing timer (with manual slide stepping via ← → arrow keys).
 > On macOS the binary is unsigned: on first launch, use right-click → Open, or run `xattr -d com.apple.quarantine ./ritardometro`.
+> On macOS the overlay joins every Space, so it stays visible over full-screen presentations (Preview, Keynote, PowerPoint), which run in a Space of their own.
 
 The installed version and repository link are always visible at the bottom of the Settings window (right-click the avatar).
 

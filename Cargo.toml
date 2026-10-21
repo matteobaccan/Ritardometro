@@ -32,6 +32,12 @@ windows = { version = "0.62", features = [
     "Win32_System_WinRT",
 ] }
 
+# Su macOS la finestra deve dichiarare ad AppKit di poter comparire sopra le app
+# a schermo intero: eframe e winit non espongono `collectionBehavior`/`level`.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+raw-window-handle = "0.6"
+
 [profile.release]
 opt-level = 3
 lto = true

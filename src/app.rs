@@ -243,6 +243,54 @@ struct ResizeWin32 {
     scala0: f32,
 }
 
+/// Su macOS un'app a schermo intero (un PDF in Anteprima, Keynote, PowerPoint)
+/// occupa uno Space tutto suo: le finestre delle altre app restano nello Space
+/// di prima e spariscono dalla vista, anche se sono "sempre in primo piano".
+///
+/// L'unico modo per restare visibili è dirlo ad AppKit: `collectionBehavior` con
+/// `canJoinAllSpaces` e un livello di finestra sopra quello delle presentazioni.
+/// Né `eframe` né `winit` 0.30 espongono queste proprietà, quindi si passa
+/// direttamente dall'`NSWindow`.
+#[cfg(target_os = "macos")]
+mod macos_spaces {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    /// `NSWindowCollectionBehaviorCanJoinAllSpaces` (1 << 0): la finestra compare
+    /// in tutti gli Space, compresi quelli delle app a schermo intero.
+    /// `Stationary` (1 << 4): non scorre via con l'animazione di cambio Space.
+    /// `FullScreenAuxiliary` (1 << 8): può affiancare una finestra a schermo intero.
+    const COMPORTAMENTO: usize = (1 << 0) | (1 << 4) | (1 << 8);
+
+    /// `NSScreenSaverWindowLevel`. Il livello `AlwaysOnTop` di winit
+    /// (`NSFloatingWindowLevel`, 3) sta sotto le finestre di presentazione, che
+    /// usano livelli alti: da qui sopra il Ritardometro resta visibile anche
+    /// durante uno slideshow di Keynote o PowerPoint.
+    const LIVELLO: isize = 1000;
+
+    pub fn mostra_sopra_schermo_intero(finestra: &impl HasWindowHandle) {
+        let Ok(handle) = finestra.window_handle() else {
+            return;
+        };
+        let RawWindowHandle::AppKit(appkit) = handle.as_raw() else {
+            return;
+        };
+        // SAFETY: `ns_view` è l'NSView della finestra appena creata da winit;
+        // `-[NSView window]` restituisce un riferimento non posseduto, quindi
+        // basta un puntatore grezzo senza gestirne il ciclo di vita.
+        unsafe {
+            let vista: *mut AnyObject = appkit.ns_view.as_ptr().cast();
+            let finestra: *mut AnyObject = msg_send![vista, window];
+            if finestra.is_null() {
+                return;
+            }
+            let _: () = msg_send![finestra, setCollectionBehavior: COMPORTAMENTO];
+            let _: () = msg_send![finestra, setLevel: LIVELLO];
+        }
+    }
+}
+
 pub struct Ritardometro {
     cfg: Config,
     percorso_config: PathBuf,
@@ -293,6 +341,8 @@ impl Ritardometro {
         cc.egui_ctx.options_mut(|o| o.zoom_with_keyboard = false);
         cc.egui_ctx.set_theme(egui::Theme::Dark);
         cc.egui_ctx.set_visuals(tema_scuro_contrasto());
+        #[cfg(target_os = "macos")]
+        macos_spaces::mostra_sopra_schermo_intero(cc);
 
         let Caricata {
             config: cfg,
