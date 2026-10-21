@@ -1,7 +1,7 @@
 //! La finestra overlay: mette insieme timer, OCR, avatar e controlli.
 
 use crate::avatar::{self, Bandiera, StatoAvatar, GIALLO, ROSSO, VERDE};
-use crate::config::{Caricata, Config, Posizione};
+use crate::config::{Caricata, Config, FinestraSalvata, Posizione};
 use crate::ocr::{self, Lettura, Messaggio, StatoOcrCondiviso};
 use crate::pacing::{self, Andatura, Bandierine, Cronometro, Ritmo};
 use crate::schermo;
@@ -311,6 +311,17 @@ pub struct Ritardometro {
     /// automatica trova il contatore in un altro angolo.
     zona_ocr: Option<ocr::Zona>,
 
+    /// Impostazioni al momento dell'ultimo salvataggio: servono ad accorgersi
+    /// di un cambiamento senza dover agganciare ogni singolo controllo del menu.
+    preferenze: Preferenze,
+    /// Quando è scattata la modifica in attesa di essere scritta su file.
+    salva_da: Option<Instant>,
+    /// Falso se il file di configurazione non è leggibile: riscriverlo
+    /// cancellerebbe quello che c'è dentro.
+    salvabile: bool,
+    /// Rettangolo fisico della finestra, per ricordarne la posizione.
+    rect_finestra: Option<(i32, i32, i32, i32)>,
+
     /// Sorveglianza della schermata, per le presentazioni senza numerazione.
     schermo_rx: Option<Receiver<schermo::Messaggio>>,
     /// Ultimo cambio di schermata rilevato.
@@ -343,6 +354,41 @@ pub struct Ritardometro {
     demo: Option<Instant>,
 }
 
+/// Le impostazioni che si possono cambiare dal menu (più la posizione della
+/// finestra): quando questa istantanea cambia, il file va riscritto.
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct Preferenze {
+    scala: f32,
+    sfondo: f32,
+    opacita: f32,
+    ocr_attivo: bool,
+    monitor: usize,
+    zona_automatica: bool,
+    intervallo_ms: u64,
+    debug: bool,
+    finestra: Option<FinestraSalvata>,
+}
+
+impl Preferenze {
+    fn da(cfg: &Config) -> Self {
+        Self {
+            scala: cfg.scale,
+            sfondo: cfg.background_opacity,
+            opacita: cfg.opacity,
+            ocr_attivo: cfg.ocr.enabled,
+            monitor: cfg.ocr.monitor,
+            zona_automatica: cfg.ocr.auto_zone,
+            intervallo_ms: cfg.ocr.interval_ms,
+            debug: cfg.ocr.save_debug,
+            finestra: cfg.window,
+        }
+    }
+}
+
+/// Quanto si aspetta, dopo l'ultima modifica, prima di scrivere su disco:
+/// trascinare uno slider non deve significare cento scritture.
+const ATTESA_SALVATAGGIO: Duration = Duration::from_millis(900);
+
 /// In demo un talk da 30 minuti dura un minuto.
 const VELOCITA_DEMO: f32 = 30.0;
 
@@ -361,6 +407,7 @@ impl Ritardometro {
             config: cfg,
             percorso,
             avviso,
+            salvabile,
         } = caricata;
 
         let ocr_condiviso = Arc::new(Mutex::new(StatoOcrCondiviso {
@@ -392,6 +439,7 @@ impl Ritardometro {
             &cfg.milestone,
             cfg.durata_secondi(),
         ));
+        let cfg_iniziale = cfg.clone();
 
         Self {
             cfg,
@@ -407,6 +455,10 @@ impl Ritardometro {
             ocr_condiviso,
             stato_ocr,
             zona_ocr: None,
+            preferenze: Preferenze::da(&cfg_iniziale),
+            salva_da: None,
+            salvabile,
+            rect_finestra: None,
             schermo_rx,
             ultimo_cambio: Instant::now(),
             cambio_visto: false,
@@ -572,6 +624,119 @@ impl Ritardometro {
         }
     }
 
+    /// Scrive sul file le impostazioni cambiate dal menu, poco dopo l'ultima
+    /// modifica. Il confronto è sull'istantanea, così nessun controllo del menu
+    /// può dimenticarsi di chiedere il salvataggio.
+    fn salva_preferenze(&mut self) {
+        if !self.salvabile {
+            return;
+        }
+        let attuali = Preferenze::da(&self.cfg);
+        if attuali != self.preferenze {
+            self.preferenze = attuali;
+            self.salva_da = Some(Instant::now());
+        }
+        if self.salva_da.is_some_and(|t| t.elapsed() >= ATTESA_SALVATAGGIO) {
+            self.scrivi_config();
+        }
+    }
+
+    fn scrivi_config(&mut self) {
+        self.salva_da = None;
+        if let Err(e) = crate::config::salva(&self.percorso_config, &self.cfg) {
+            self.avviso = Some(e);
+        }
+    }
+
+    /// Ricorda dove è stata trascinata la finestra. Si aspetta che il
+    /// posizionamento iniziale si sia assestato, altrimenti si salverebbe la
+    /// posizione di partenza invece di quella scelta.
+    fn ricorda_posizione(&mut self) {
+        if !self.posizionato || self.nascita.elapsed() < Duration::from_millis(1500) {
+            return;
+        }
+        let Some((sinistra, alto, _, _)) = self.rect_finestra else {
+            return;
+        };
+        let spostata = self
+            .cfg
+            .window
+            .is_none_or(|v| (v.x - sinistra).abs() > 2 || (v.y - alto).abs() > 2);
+        if spostata {
+            self.cfg.window = Some(FinestraSalvata {
+                x: sinistra,
+                y: alto,
+            });
+        }
+    }
+
+    /// Rimette la finestra dov'era all'ultima chiusura, ma solo se quel punto è
+    /// ancora su uno schermo collegato: dopo aver staccato il monitor di un
+    /// evento, l'overlay resterebbe invisibile fuori dallo schermo.
+    fn ripristina_posizione(&mut self, ctx: &egui::Context, monitor_corrente: Vec2) -> bool {
+        let Some(f) = self.cfg.window else {
+            return false;
+        };
+        let ppp = ctx.pixels_per_point().max(0.1);
+        let dim = Vec2::new(LARGHEZZA, ALTEZZA) * self.cfg.scale * ppp;
+        let mut schermi = schermo::monitor_rettangoli();
+        if schermi.is_empty() {
+            // Senza elenco dei monitor (Linux) si controlla almeno quello corrente.
+            schermi.push((
+                0,
+                0,
+                (monitor_corrente.x * ppp) as u32,
+                (monitor_corrente.y * ppp) as u32,
+            ));
+        }
+        if !schermo::posizione_visibile((f.x, f.y, dim.x as u32, dim.y as u32), &schermi) {
+            self.cfg.window = None;
+            return false;
+        }
+
+        // Su Windows si usano direttamente i pixel fisici: con monitor a DPI
+        // diversi la conversione in punti sbaglierebbe schermo.
+        #[cfg(windows)]
+        if self.hwnd_principale != 0 {
+            unsafe {
+                win32_drag::SetWindowPos(
+                    self.hwnd_principale,
+                    win32_drag::HWND_TOPMOST,
+                    f.x,
+                    f.y,
+                    0,
+                    0,
+                    win32_drag::SWP_NOSIZE | win32_drag::SWP_NOACTIVATE,
+                );
+            }
+            return true;
+        }
+
+        ctx.send_viewport_cmd(ViewportCommand::OuterPosition(Pos2::new(
+            f.x as f32 / ppp,
+            f.y as f32 / ppp,
+        )));
+        true
+    }
+
+    /// Accende l'OCR dal menu: se il programma era partito con l'OCR spento il
+    /// thread non esiste ancora e va creato adesso.
+    fn accendi_ocr(&mut self, ctx: &egui::Context) {
+        if self.ocr_rx.is_some() || self.demo.is_some() {
+            return;
+        }
+        match ocr::avvia(Arc::clone(&self.ocr_condiviso), ctx.clone()) {
+            Ok(rx) => {
+                self.ocr_rx = Some(rx);
+                self.stato_ocr = "Starting OCR...".to_string();
+            }
+            Err(e) => {
+                self.cfg.ocr.enabled = false;
+                self.stato_ocr = e;
+            }
+        }
+    }
+
     /// Legge il thread che sorveglia la schermata (presentazioni senza numerazione).
     fn ricevi_schermo(&mut self) {
         let Some(rx) = &self.schermo_rx else { return };
@@ -708,6 +873,10 @@ impl Ritardometro {
         let Some(monitor) = ctx.input(|i| i.viewport().monitor_size) else {
             return;
         };
+        if self.ripristina_posizione(ctx, monitor) {
+            self.posizionato = true;
+            return;
+        }
         let dim = Vec2::new(LARGHEZZA, ALTEZZA) * self.cfg.scale;
         let m = self.cfg.margin;
         let x = match self.cfg.position {
@@ -732,7 +901,7 @@ impl Ritardometro {
             return;
         }
 
-        let dim_menu = Vec2::new(380.0, 615.0);
+        let dim_menu = Vec2::new(380.0, 645.0);
         let mut builder = egui::ViewportBuilder::default()
             .with_title(concat!("Ritardometro v", env!("CARGO_PKG_VERSION"), " — Settings"))
             .with_inner_size(dim_menu)
@@ -828,6 +997,27 @@ impl Ritardometro {
                         self.cambia_scala(ctx_root, 1.0);
                     }
                 });
+                ui.end_row();
+
+                ui.label("OCR:");
+                if ui
+                    .checkbox(
+                        &mut self.cfg.ocr.enabled,
+                        "Read the slide counter from the screen",
+                    )
+                    .on_hover_text(
+                        "Off = plain timer. The slide number can still be stepped \
+                         with the ← → arrow keys",
+                    )
+                    .changed()
+                {
+                    self.sincronizza_ocr_condiviso();
+                    if self.cfg.ocr.enabled {
+                        self.accendi_ocr(ctx_root);
+                    } else {
+                        self.stato_ocr = "OCR disabled: timer only".to_string();
+                    }
+                }
                 ui.end_row();
 
                 // Riga 1: Auto
@@ -958,7 +1148,7 @@ impl Ritardometro {
             self.menu_aperto = false;
         }
         ui.label(
-            egui::RichText::new("restart app after editing .toml file")
+            egui::RichText::new("changes here are saved automatically · restart after editing the .toml by hand")
                 .small()
                 .color(Color32::from_rgb(195, 200, 215)),
         );
@@ -1084,7 +1274,7 @@ impl Ritardometro {
         }
     }
 
-    fn aggiorna_centro_finestra_ocr(&self, ctx: &egui::Context) {
+    fn aggiorna_centro_finestra_ocr(&mut self, ctx: &egui::Context) {
         let mut riquadro: Option<(i32, i32, i32, i32)> = None;
         #[cfg(windows)]
         if self.hwnd_principale != 0 {
@@ -1104,6 +1294,7 @@ impl Ritardometro {
                 ));
             }
         }
+        self.rect_finestra = riquadro.or(self.rect_finestra);
         if let Ok(mut s) = self.ocr_condiviso.lock() {
             if let Some(r @ (sinistra, alto, destra, basso)) = riquadro {
                 s.centro_finestra = Some(((sinistra + destra) / 2, (alto + basso) / 2));
@@ -1314,6 +1505,13 @@ impl eframe::App for Ritardometro {
         [0.0, 0.0, 0.0, 0.0] // finestra trasparente
     }
 
+    /// Alla chiusura si scrive subito quello che aspettava il ritardo.
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        if self.salvabile && self.salva_da.is_some() {
+            self.scrivi_config();
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         #[cfg(windows)]
@@ -1475,6 +1673,8 @@ impl eframe::App for Ritardometro {
         }
         self.mostra_finestra_menu(&ctx);
         self.mostra_evidenziazione_ocr(&ctx);
+        self.ricorda_posizione();
+        self.salva_preferenze();
 
         // ---------------- stato dell'avatar ----------------
         let stallo = self.stallo(&fase, andatura.as_ref());

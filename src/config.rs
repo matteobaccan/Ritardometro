@@ -40,7 +40,18 @@ pub struct Config {
     #[serde(alias = "margine")]
     pub margin: f32,
     pub ocr: OcrConfig,
+    /// Posizione della finestra all'ultima chiusura: la scrive il programma,
+    /// non l'utente. Assente = si parte dall'angolo indicato da `position`.
+    pub window: Option<FinestraSalvata>,
     pub milestone: Vec<MilestoneConfig>,
+}
+
+/// Angolo in alto a sinistra della finestra, in pixel fisici dello schermo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct FinestraSalvata {
+    pub x: i32,
+    pub y: i32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -106,6 +117,7 @@ impl Default for Config {
             position: Posizione::TopRight,
             margin: 24.0,
             ocr: OcrConfig::default(),
+            window: None,
             milestone: vec![
                 MilestoneConfig {
                     percentage: Some(50.0),
@@ -177,6 +189,9 @@ pub struct Caricata {
     pub config: Config,
     pub percorso: PathBuf,
     pub avviso: Option<String>,
+    /// Falso quando il file esiste ma non si è riusciti a leggerlo o a
+    /// interpretarlo: riscriverlo cancellerebbe la configurazione dell'utente.
+    pub salvabile: bool,
 }
 
 /// Percorso di default: `ritardometro.toml` accanto all'eseguibile.
@@ -202,6 +217,7 @@ pub fn carica(percorso: &Path) -> Caricata {
                 config,
                 percorso: percorso.to_path_buf(),
                 avviso: None,
+                salvabile: true,
             },
             Err(e) => Caricata {
                 config: Config::default(),
@@ -209,6 +225,7 @@ pub fn carica(percorso: &Path) -> Caricata {
                 avviso: Some(format!(
                     "Error in config file, falling back to defaults:\n{e}"
                 )),
+                salvabile: false,
             },
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -218,20 +235,208 @@ pub fn carica(percorso: &Path) -> Caricata {
             Caricata {
                 config: Config::default(),
                 percorso: percorso.to_path_buf(),
-                avviso,
+                avviso: avviso.clone(),
+                salvabile: avviso.is_none(),
             }
         }
         Err(e) => Caricata {
             config: Config::default(),
-                percorso: percorso.to_path_buf(),
-                avviso: Some(format!("Could not read {}: {e}", percorso.display())),
+            percorso: percorso.to_path_buf(),
+            avviso: Some(format!("Could not read {}: {e}", percorso.display())),
+            salvabile: false,
         },
     }
+}
+
+// ------------------------------------------------------------------
+// Salvataggio delle impostazioni cambiate dal menu
+// ------------------------------------------------------------------
+
+/// Riscrive nel file solo le chiavi indicate, lasciando intatto tutto il resto.
+///
+/// Non si ri-serializza l'intera struttura: il `ritardometro.toml` è pieno di
+/// commenti che spiegano ogni parametro, e sono la documentazione del programma.
+fn imposta_chiave(testo: &str, sezione: Option<&str>, chiave: &str, valore: &str) -> String {
+    let intestazione = sezione.map(|s| format!("[{s}]"));
+    let mut righe: Vec<String> = testo.lines().map(str::to_string).collect();
+    let mut dentro = sezione.is_none();
+    let mut fine_sezione = None;
+
+    for i in 0..righe.len() {
+        let riga = righe[i].trim();
+        if riga.starts_with('[') {
+            // Una nuova intestazione chiude la sezione precedente
+            if dentro {
+                fine_sezione = Some(i);
+                dentro = false;
+                break;
+            }
+            dentro = intestazione.as_deref() == Some(riga);
+            continue;
+        }
+        if !dentro {
+            continue;
+        }
+        let Some((prima, _)) = riga.split_once('=') else {
+            continue;
+        };
+        if prima.trim() == chiave {
+            righe[i] = format!("{chiave} = {valore}");
+            return righe.join("\n") + "\n";
+        }
+    }
+
+    // Chiave assente: la aggiungo in fondo alla sua sezione, saltando le righe vuote
+    let mut punto = fine_sezione.unwrap_or(righe.len());
+    while punto > 0 && righe[punto - 1].trim().is_empty() {
+        punto -= 1;
+    }
+    if !dentro && fine_sezione.is_none() {
+        // Manca proprio la sezione: la creo in fondo al file
+        if let Some(h) = intestazione {
+            righe.push(String::new());
+            righe.push(h);
+            righe.push(format!("{chiave} = {valore}"));
+            return righe.join("\n") + "\n";
+        }
+    }
+    righe.insert(punto, format!("{chiave} = {valore}"));
+    righe.join("\n") + "\n"
+}
+
+fn numero(v: f32) -> String {
+    format!("{v:.2}")
+        .trim_end_matches('0')
+        .trim_end_matches('.')
+        .to_string()
+}
+
+/// Applica al testo del file tutte le impostazioni modificabili dal menu.
+pub fn aggiorna_testo(testo: &str, cfg: &Config) -> String {
+    let mut t = testo.to_string();
+    for (sezione, chiave, valore) in [
+        (None, "scale", numero(cfg.scale)),
+        (None, "background_opacity", numero(cfg.background_opacity)),
+        (None, "opacity", numero(cfg.opacity)),
+        (Some("ocr"), "enabled", cfg.ocr.enabled.to_string()),
+        (Some("ocr"), "monitor", cfg.ocr.monitor.to_string()),
+        (Some("ocr"), "auto_zone", cfg.ocr.auto_zone.to_string()),
+        (Some("ocr"), "interval_ms", cfg.ocr.interval_ms.to_string()),
+        (Some("ocr"), "save_debug", cfg.ocr.save_debug.to_string()),
+    ] {
+        t = imposta_chiave(&t, sezione, chiave, &valore);
+    }
+    if let Some(f) = cfg.window {
+        t = imposta_chiave(&t, Some("window"), "x", &f.x.to_string());
+        t = imposta_chiave(&t, Some("window"), "y", &f.y.to_string());
+    }
+    t
+}
+
+/// Salva le impostazioni nel file di configurazione, conservandone i commenti.
+///
+/// Rilegge il file appena prima di scrivere, così una modifica fatta a mano
+/// mentre il programma è aperto non viene persa (vince comunque chi scrive per
+/// ultimo sulle chiavi in conflitto), e scrive su un file temporaneo che poi
+/// rinomina: un'interruzione a metà non lascia una configurazione monca.
+pub fn salva(percorso: &Path, cfg: &Config) -> Result<(), String> {
+    let attuale = std::fs::read_to_string(percorso).unwrap_or_else(|_| TEMPLATE.to_string());
+    let nuovo = aggiorna_testo(&attuale, cfg);
+    if nuovo == attuale {
+        return Ok(());
+    }
+    let temporaneo = percorso.with_extension("toml.tmp");
+    std::fs::write(&temporaneo, &nuovo)
+        .map_err(|e| format!("Could not write {}: {e}", temporaneo.display()))?;
+    std::fs::rename(&temporaneo, percorso)
+        .map_err(|e| format!("Could not update {}: {e}", percorso.display()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+#[test]
+    fn salvare_non_tocca_commenti_e_altre_chiavi() {
+        let c = Config {
+            scale: 1.3,
+            ocr: OcrConfig {
+                enabled: false,
+                monitor: 2,
+                ..OcrConfig::default()
+            },
+            ..Config::default()
+        };
+        let nuovo = aggiorna_testo(TEMPLATE, &c);
+
+        // I commenti del template restano tutti
+        for riga in TEMPLATE.lines().filter(|r| r.trim_start().starts_with('#')) {
+            assert!(nuovo.contains(riga), "commento perso: {riga}");
+        }
+        assert!(nuovo.contains("scale = 1.3"));
+        assert!(nuovo.contains("enabled = false"));
+        assert!(nuovo.contains("monitor = 2"));
+        // Le chiavi che il menu non tocca restano come stavano
+        assert!(nuovo.contains("duration_minutes = 30"));
+        assert!(nuovo.contains("text = \"HALF WAY!\""));
+
+        // E il risultato si rilegge dando esattamente i valori salvati
+        let riletta = da_testo(&nuovo).unwrap();
+        assert_eq!(riletta.scale, 1.3);
+        assert!(!riletta.ocr.enabled);
+        assert_eq!(riletta.ocr.monitor, 2);
+        assert_eq!(riletta.duration_minutes, 30.0);
+        assert_eq!(riletta.milestone, Config::default().milestone);
+    }
+
+    #[test]
+    fn la_chiave_giusta_nella_sezione_giusta() {
+        // `enabled` esiste solo dentro [ocr]: una chiave omonima in cima al
+        // file non deve essere confusa con quella della sezione.
+        let testo = "enabled = true\n\n[ocr]\nenabled = true\n";
+        let fuori = imposta_chiave(testo, None, "enabled", "false");
+        assert_eq!(fuori, "enabled = false\n\n[ocr]\nenabled = true\n");
+        let dentro = imposta_chiave(testo, Some("ocr"), "enabled", "false");
+        assert_eq!(dentro, "enabled = true\n\n[ocr]\nenabled = false\n");
+    }
+
+    #[test]
+    fn una_chiave_mancante_viene_aggiunta_nella_sua_sezione() {
+        let testo = "duration_minutes = 30\n\n[ocr]\nmonitor = 0\n\n[[milestone]]\ntext = \"X\"\n";
+        let t = imposta_chiave(testo, Some("ocr"), "auto_zone", "false");
+        assert_eq!(
+            t,
+            "duration_minutes = 30\n\n[ocr]\nmonitor = 0\nauto_zone = false\n\n[[milestone]]\ntext = \"X\"\n"
+        );
+        // Una chiave di primo livello finisce prima della prima sezione
+        let t = imposta_chiave(testo, None, "scale", "1.5");
+        assert!(t.starts_with("duration_minutes = 30\nscale = 1.5\n"));
+        assert!(da_testo(&t).is_ok());
+    }
+
+    #[test]
+    fn la_sezione_window_viene_creata_e_riletta() {
+        let c = Config {
+            window: Some(FinestraSalvata { x: 1920, y: -40 }),
+            ..Config::default()
+        };
+        let t = aggiorna_testo(TEMPLATE, &c);
+        assert!(t.contains("[window]"));
+        let riletta = da_testo(&t).unwrap();
+        assert_eq!(riletta.window, Some(FinestraSalvata { x: 1920, y: -40 }));
+
+        // Salvare una seconda volta aggiorna i valori senza duplicare la sezione
+        let c2 = Config {
+            window: Some(FinestraSalvata { x: 10, y: 20 }),
+            ..riletta
+        };
+        let t2 = aggiorna_testo(&t, &c2);
+        assert_eq!(t2.matches("[window]").count(), 1);
+        assert_eq!(
+            da_testo(&t2).unwrap().window,
+            Some(FinestraSalvata { x: 10, y: 20 })
+        );
+    }
 
     #[test]
     fn il_template_corrisponde_ai_default() {

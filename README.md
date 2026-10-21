@@ -83,7 +83,7 @@ On first launch, a documented `ritardometro.toml` file is automatically created.
 Before stepping on stage:
 
 1. Open your presentation slides in full screen (duplicated display).
-2. Launch Ritardometro: it appears in your configured corner (default: top-right); drag and resize it anywhere, including across multiple monitors.
+2. Launch Ritardometro: it appears in your configured corner (default: top-right); drag and resize it anywhere, including across multiple monitors. Where you leave it is where it comes back next time — unless that spot is no longer on any screen (an unplugged monitor), in which case it returns to the configured corner.
 3. It starts automatically as soon as you transition from slide 1 to slide 2, or upon first click.
 
 ### Keyboard Shortcuts
@@ -121,6 +121,7 @@ Keys work when the overlay is focused (click on it); during your talk, your focu
 | Time −1 / +1 min | Adjust elapsed talk time |
 | Slide −1 / +1 | Manually step slide number |
 | Size − / + / 100% | Scale overlay size |
+| OCR: Read the slide counter from the screen | Turns slide OCR on or off without restarting (off = plain timer) |
 | OCR Monitor: Auto | Captures the display where Ritardometro currently resides |
 | Detected Displays: Mon 1, Mon 2… | Pin OCR capture to a specific display |
 | Auto-detect: Find the slide counter in any corner | Scans the other corners when the configured area reads nothing, and locks onto the one with the counter |
@@ -129,6 +130,7 @@ Keys work when the overlay is focused (click on it); during your talk, your focu
 | Save ritardometro-debug.png | Saves raw OCR captures for tuning capture boundaries |
 | Transparency: Background, Avatar & Text | Independent opacity controls for HUD and avatar |
 | Open Configuration File | Opens `ritardometro.toml` in your default text editor |
+| — | Everything changed in this window is written back to `ritardometro.toml` a moment later, comments and all |
 | Ritardometro vX.Y.Z · GitHub | Current version & direct link to GitHub repository |
 | Close Menu / Quit App | Dismiss window or exit application |
 
@@ -176,6 +178,8 @@ text = "5 MIN LEFT"
 ```
 
 You can define as many `[[milestone]]` sections as needed, using either `percentage` of talk duration or `minutes_left`.
+
+Anything you change in the Settings window — size, transparency, OCR on/off, monitor, polling rate — is written back into this file shortly after, keeping every comment in place, so it is there again at the next launch. The window position is saved the same way, in a `[window]` section the program manages on its own. Editing the file by hand while Ritardometro is running still works, but the keys above are rewritten from the app: close it first. If the file cannot be parsed, Ritardometro falls back to the defaults and stops writing to it, so a broken file is never overwritten.
 
 ### Troubleshooting OCR
 
