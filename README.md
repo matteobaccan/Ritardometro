@@ -67,11 +67,11 @@ cargo build --release
 
 ## Publishing a New Version
 
-1. Bump `version` in `Cargo.toml` (e.g. `1.1.0`) and commit.
+1. Bump `version` in `Cargo.toml` (e.g. `1.2.0`) and commit.
 2. Create and push the corresponding tag:
    ```sh
-   git tag v1.1.0
-   git push origin v1.1.0
+   git tag v1.2.0
+   git push origin v1.2.0
    ```
 3. The [`release.yml`](.github/workflows/release.yml) GitHub Action automatically validates the version, cross-compiles release binaries for Windows, Linux, and macOS (Apple Silicon + Intel), generates `SHA256SUMS.txt`, and publishes the release.
 
@@ -148,7 +148,7 @@ Everything else is grouped in four tabs:
 | **OCR** | Monitor, automatic counter detection, the capture rectangle in percentages, a button to flash it on screen, polling rate, magnification and the debug capture. Greyed out unless you are in OCR mode |
 | **Milestones** | The speech balloons: add or remove them, set each one at a percentage of the talk or at minutes left, and type its text |
 
-The footer carries the version, the link to GitHub and the Close / Quit buttons.
+The footer carries the version, the author, the link to GitHub and the Close / Quit buttons.
 
 Two settings deserve a note. `--minutes` and `--slides` given on the command line apply to that run only and are deliberately *not* written to the file. And a configuration file that cannot be parsed is never overwritten: Ritardometro falls back to the defaults and leaves your file alone.
 
@@ -166,7 +166,8 @@ mode = "ocr"              # "ocr" = read the counter, "screen" = watch for chang
 tolerance_seconds = 60    # Seconds of delta considered "on track"
 panic_seconds = 180       # Seconds behind schedule before avatar panics
 scale = 1.0               # Initial overlay scale factor
-background_opacity = 0.70 # HUD background box opacity (0.0 - 1.0)
+background_opacity = 0.70 # HUD background box opacity (0.0 - 1.0; at 0 the HUD keeps
+                          # a dark contour so it stays readable on a white slide)
 opacity = 1.0             # Avatar and text opacity (0.15 - 1.0)
 stuck_factor = 1.5        # No slide counter: show the pulsing watch after this many
                           # times the average time per slide (0 = never watch the screen)
