@@ -1805,12 +1805,14 @@ impl eframe::App for Ritardometro {
         } else {
             colore_tempo
         };
-        painter.text(
+        testo_contornato(
+            &painter,
             Pos2::new(cx, y),
             Align2::CENTER_TOP,
             tempo,
             FontId::monospace(40.0 * s),
             applica_op(colore_tempo),
+            applica_op(CONTORNO),
         );
         y += 46.0 * s;
 
@@ -1856,12 +1858,14 @@ impl eframe::App for Ritardometro {
                 None => "remaining time".to_string(),
             },
         };
-        painter.text(
+        testo_contornato(
+            &painter,
             Pos2::new(cx, y),
             Align2::CENTER_TOP,
             riga,
             FontId::proportional(14.0 * s),
             applica_op(colore_scarto),
+            applica_op(CONTORNO),
         );
         y += 21.0 * s;
 
@@ -1869,6 +1873,13 @@ impl eframe::App for Ritardometro {
         let barra = Rect::from_min_size(
             Pos2::new(area.min.x + 18.0 * s, y),
             Vec2::new(area.width() - 36.0 * s, 6.0 * s),
+        );
+        // Cornice scura dietro la barra: senza, su una slide bianca sparirebbe
+        // anche lei, essendo disegnata in bianco trasparente.
+        painter.rect_filled(
+            barra.expand(1.6 * s),
+            CornerRadius::same((4.0 * s) as u8),
+            applica_op(CONTORNO),
         );
         painter.rect_filled(
             barra,
@@ -1887,13 +1898,18 @@ impl eframe::App for Ritardometro {
             if tot > 0 {
                 let p = ((sl.saturating_sub(1)) as f32 / tot as f32).clamp(0.0, 1.0);
                 let x = barra.min.x + barra.width() * p;
-                painter.line_segment(
-                    [
-                        Pos2::new(x, barra.min.y - 4.0 * s),
-                        Pos2::new(x, barra.max.y + 4.0 * s),
-                    ],
-                    Stroke::new(3.0 * s, applica_op(colore_scarto)),
-                );
+                for (spessore, colore) in [
+                    (5.4 * s, applica_op(CONTORNO)),
+                    (3.0 * s, applica_op(colore_scarto)),
+                ] {
+                    painter.line_segment(
+                        [
+                            Pos2::new(x, barra.min.y - 4.0 * s),
+                            Pos2::new(x, barra.max.y + 4.0 * s),
+                        ],
+                        Stroke::new(spessore, colore),
+                    );
+                }
             }
         }
         y += 14.0 * s;
@@ -1906,12 +1922,14 @@ impl eframe::App for Ritardometro {
         } else {
             accorcia(&self.stato_ocr, 40)
         };
-        painter.text(
+        testo_contornato(
+            &painter,
             Pos2::new(cx, y),
             Align2::CENTER_TOP,
             nota,
             FontId::proportional(10.5 * s),
             applica_op(GRIGIO),
+            applica_op(CONTORNO),
         );
 
         // L'avviso sparisce dopo il primo avvio.
@@ -2070,6 +2088,49 @@ fn stato_avatar(
             },
         },
     }
+}
+
+/// Colore del contorno di testi e barra: quasi nero, come l'inchiostro della
+/// caricatura.
+const CONTORNO: Color32 = Color32::from_rgb(14, 10, 12);
+
+/// Scrive il testo con un contorno scuro intorno.
+///
+/// Con lo sfondo dell'overlay trasparente l'HUD finisce direttamente sopra la
+/// slide: su una slide bianca il testo bianco sparirebbe. Il contorno costa
+/// quattro passate in più e rende la scritta leggibile su qualsiasi fondo,
+/// con lo stesso tratto da fumetto dell'avatar.
+#[allow(clippy::too_many_arguments)]
+fn testo_contornato(
+    painter: &egui::Painter,
+    pos: Pos2,
+    ancora: Align2,
+    testo: impl ToString,
+    font: FontId,
+    colore: Color32,
+    contorno: Color32,
+) {
+    let testo = testo.to_string();
+    let spessore = (font.size * 0.085).max(1.0);
+    for (dx, dy) in [
+        (-1.0_f32, 0.0_f32),
+        (1.0, 0.0),
+        (0.0, -1.0),
+        (0.0, 1.0),
+        (-0.7, -0.7),
+        (0.7, -0.7),
+        (-0.7, 0.7),
+        (0.7, 0.7),
+    ] {
+        painter.text(
+            Pos2::new(pos.x + dx * spessore, pos.y + dy * spessore),
+            ancora,
+            &testo,
+            font.clone(),
+            contorno,
+        );
+    }
+    painter.text(pos, ancora, testo, font, colore);
 }
 
 fn accorcia(testo: &str, max: usize) -> String {
