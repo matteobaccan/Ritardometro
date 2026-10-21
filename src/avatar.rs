@@ -31,7 +31,8 @@ const QUADRANTE: Color32 = Color32::from_rgb(242, 240, 232);
 const GOCCIA: Color32 = Color32::from_rgb(110, 195, 255);
 const GOCCIA_SCURA: Color32 = Color32::from_rgb(65, 145, 230);
 
-const PNG_CARICATURA: &[u8] = include_bytes!("matteo_caricatura.png");
+/// La caricatura: serve all'avatar e, ritagliata sulla testa, all'icona della finestra.
+pub const PNG_CARICATURA: &[u8] = include_bytes!("matteo_caricatura.png");
 
 #[derive(Debug, Clone)]
 pub struct Bandiera {
