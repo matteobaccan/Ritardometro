@@ -35,10 +35,10 @@ Download the archive for your operating system from the [Releases page](https://
 
 | Platform | Archive |
 |---|---|
-| Windows 10/11 (x64) | `ritardometro-vX.Y.Z-windows-x64.zip` |
-| Linux (x64) | `ritardometro-vX.Y.Z-linux-x64.tar.gz` |
-| macOS Apple Silicon (M1/M2/M3…) | `ritardometro-vX.Y.Z-macos-arm64.tar.gz` |
-| macOS Intel | `ritardometro-vX.Y.Z-macos-x64.tar.gz` |
+| Windows 10/11 (x64) | `ritardometro-windows-x64-vX.Y.Z.zip` |
+| Linux (x64) | `ritardometro-linux-x64-vX.Y.Z.tar.gz` |
+| macOS Apple Silicon (M1/M2/M3…) | `ritardometro-macos-arm64-vX.Y.Z.tar.gz` |
+| macOS Intel | `ritardometro-macos-x64-vX.Y.Z.tar.gz` |
 
 > Automatic slide OCR detection runs natively on Windows via `Windows.Media.Ocr`. On macOS, Ritardometro watches the screen for slide changes instead (see `stuck_factor` below). On Linux it works as a full-featured pacing timer (with manual slide stepping via ← → arrow keys).
 > On macOS the binary is unsigned: on first launch, use right-click → Open, or run `xattr -d com.apple.quarantine ./ritardometro`.

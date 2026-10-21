@@ -86,7 +86,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $dir = "ritardometro-$env:TAG-${{ matrix.nome }}"
+          $dir = "ritardometro-${{ matrix.nome }}-$env:TAG"
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item target/${{ matrix.target }}/release/${{ matrix.exe }} $dir/
           Copy-Item ritardometro.toml, README.md, LICENSE $dir/
@@ -99,7 +99,7 @@ jobs:
       - name: Package (Linux/macOS)
         if: runner.os != 'Windows'
         run: |
-          dir="ritardometro-$TAG-${{ matrix.nome }}"
+          dir="ritardometro-${{ matrix.nome }}-$TAG"
           mkdir -p "$dir"
           cp target/${{ matrix.target }}/release/${{ matrix.exe }} "$dir/"
           chmod +x "$dir/${{ matrix.exe }}"
@@ -134,10 +134,10 @@ jobs:
             ## Downloads
             | Platform | File |
             |---|---|
-            | Windows 10/11 (x64) | `ritardometro-${{ env.TAG }}-windows-x64.zip` |
-            | Linux (x64) | `ritardometro-${{ env.TAG }}-linux-x64.tar.gz` |
-            | macOS Apple Silicon (M1/M2/M3…) | `ritardometro-${{ env.TAG }}-macos-arm64.tar.gz` |
-            | macOS Intel | `ritardometro-${{ env.TAG }}-macos-x64.tar.gz` |
+            | Windows 10/11 (x64) | `ritardometro-windows-x64-${{ env.TAG }}.zip` |
+            | Linux (x64) | `ritardometro-linux-x64-${{ env.TAG }}.tar.gz` |
+            | macOS Apple Silicon (M1/M2/M3…) | `ritardometro-macos-arm64-${{ env.TAG }}.tar.gz` |
+            | macOS Intel | `ritardometro-macos-x64-${{ env.TAG }}.tar.gz` |
 
             > Automatic slide detection via screen OCR is supported on Windows.
             > On macOS, Ritardometro watches the screen instead and shows a pulsing watch when a slide overstays
