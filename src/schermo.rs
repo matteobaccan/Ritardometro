@@ -76,6 +76,30 @@ impl Impronta {
     }
 }
 
+/// La finestra è ancora visibile su uno dei monitor collegati?
+///
+/// Serve al ripristino della posizione: se lo schermo su cui stava l'overlay
+/// non c'è più, rimetterlo lì lo renderebbe invisibile. Si pretende che il
+/// centro cada dentro un monitor e che almeno il 60% dell'area sia a video.
+pub fn posizione_visibile(finestra: (i32, i32, u32, u32), monitor: &[(i32, i32, u32, u32)]) -> bool {
+    let (fx, fy, fw, fh) = finestra;
+    if fw == 0 || fh == 0 {
+        return false;
+    }
+    let cx = fx + fw as i32 / 2;
+    let cy = fy + fh as i32 / 2;
+    let area = fw as i64 * fh as i64;
+    monitor.iter().any(|&(mx, my, mw, mh)| {
+        let dentro = cx >= mx && cx < mx + mw as i32 && cy >= my && cy < my + mh as i32;
+        let sovrapposta_x = (fx + fw as i32).min(mx + mw as i32) - fx.max(mx);
+        let sovrapposta_y = (fy + fh as i32).min(my + mh as i32) - fy.max(my);
+        dentro
+            && sovrapposta_x > 0
+            && sovrapposta_y > 0
+            && (sovrapposta_x as i64 * sovrapposta_y as i64) * 10 >= area * 6
+    })
+}
+
 #[derive(Debug, Clone)]
 pub enum Messaggio {
     /// La schermata è cambiata: siamo passati a un'altra slide.
@@ -84,7 +108,7 @@ pub enum Messaggio {
 }
 
 #[cfg(any(windows, target_os = "macos"))]
-pub use disponibile::{avvia, numero_monitor};
+pub use disponibile::{avvia, monitor_rettangoli, numero_monitor};
 /// Usata dall'OCR, che esiste solo su Windows.
 #[cfg(windows)]
 pub use disponibile::scegli_monitor;
@@ -127,6 +151,17 @@ mod disponibile {
 
     pub fn numero_monitor() -> usize {
         Monitor::all().map(|m| m.len().max(1)).unwrap_or(1)
+    }
+
+    /// Rettangoli fisici `(x, y, larghezza, altezza)` dei monitor collegati.
+    pub fn monitor_rettangoli() -> Vec<(i32, i32, u32, u32)> {
+        let Ok(tutti) = Monitor::all() else {
+            return Vec::new();
+        };
+        tutti
+            .iter()
+            .filter_map(|m| Some((m.x().ok()?, m.y().ok()?, m.width().ok()?, m.height().ok()?)))
+            .collect()
     }
 
     /// Avvia il thread che sorveglia la schermata.
@@ -229,6 +264,12 @@ pub fn numero_monitor() -> usize {
     1
 }
 
+/// Senza `xcap` non si sa quali monitor ci siano: decide chi chiama.
+#[cfg(not(any(windows, target_os = "macos")))]
+pub fn monitor_rettangoli() -> Vec<(i32, i32, u32, u32)> {
+    Vec::new()
+}
+
 /// Su Linux `xcap` non è compilato: il rilevamento non è disponibile.
 #[cfg(not(any(windows, target_os = "macos")))]
 pub fn avvia(
@@ -242,6 +283,34 @@ pub fn avvia(
 mod tests {
     use super::*;
     use image::{Rgba, RgbaImage};
+
+const SCHERMO: (i32, i32, u32, u32) = (0, 0, 1920, 1080);
+    const SECONDO: (i32, i32, u32, u32) = (1920, -200, 2560, 1440);
+
+    #[test]
+    fn una_finestra_dentro_lo_schermo_e_visibile() {
+        assert!(posizione_visibile((1600, 24, 220, 340), &[SCHERMO]));
+        // anche sul secondo monitor, con origine negativa
+        assert!(posizione_visibile((4200, -150, 220, 340), &[SCHERMO, SECONDO]));
+    }
+
+    #[test]
+    fn una_finestra_fuori_schermo_non_e_visibile() {
+        // monitor scollegato: le coordinate salvate non esistono più
+        assert!(!posizione_visibile((4200, -150, 220, 340), &[SCHERMO]));
+        // mezza fuori dal bordo destro: meno del 60% a video
+        assert!(!posizione_visibile((1830, 24, 220, 340), &[SCHERMO]));
+        // sparita in alto a sinistra
+        assert!(!posizione_visibile((-9000, -9000, 220, 340), &[SCHERMO]));
+        // nessun monitor noto
+        assert!(!posizione_visibile((100, 100, 220, 340), &[]));
+    }
+
+    #[test]
+    fn una_finestra_appena_sul_bordo_resta_valida() {
+        // sporge di 40 px su 220: l'81% è ancora a video
+        assert!(posizione_visibile((1740, 700, 220, 340), &[SCHERMO]));
+    }
 
     /// Schermata finta: sfondo uniforme con un rettangolo chiaro dentro.
     fn schermata(sfondo: u8, rettangolo: Option<(u32, u32, u32, u32)>) -> RgbaImage {
