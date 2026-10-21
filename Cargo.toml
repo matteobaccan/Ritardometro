@@ -20,9 +20,14 @@ toml = "1.0"
 regex = "1"
 image = { version = "0.25", default-features = false, features = ["png"] }
 
-# Cattura schermo + OCR servono solo su Windows (Windows.Media.Ocr)
-[target.'cfg(windows)'.dependencies]
+# Cattura dello schermo: serve all'OCR su Windows e al rilevamento del cambio
+# schermata su Windows e macOS. Su Linux `xcap` pretende libpipewire-0.3 a build
+# time, quindi lì resta fuori e il rilevamento non è disponibile.
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 xcap = "0.9"
+
+# L'OCR integrato è solo su Windows (Windows.Media.Ocr)
+[target.'cfg(windows)'.dependencies]
 windows = { version = "0.62", features = [
     "Foundation",
     "Globalization",
