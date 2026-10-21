@@ -1,7 +1,7 @@
 //! Implementazione Windows: cattura con `xcap` + OCR con `Windows.Media.Ocr`.
 //! L'OCR è integrato in Windows 10/11: niente Tesseract da installare.
 
-use super::{interpreta, Messaggio, StatoOcrCondiviso};
+use super::{con_zona, interpreta, Esito, Messaggio, Scansione, StatoOcrCondiviso, Zona};
 use crate::config::OcrConfig;
 use image::{imageops::FilterType, DynamicImage, GrayImage, Luma};
 use std::sync::mpsc::{channel, Receiver, Sender};
@@ -54,12 +54,18 @@ fn ciclo(
         .ok()
         .and_then(|p| p.parent().map(|d| d.join("ritardometro-debug.png")));
 
-    loop {
-        let stato = condiviso.lock().map(|s| s.clone()).unwrap_or(StatoOcrCondiviso {
+    let leggi_stato = || {
+        condiviso.lock().map(|s| s.clone()).unwrap_or(StatoOcrCondiviso {
             cfg: OcrConfig::default(),
             centro_finestra: None,
+            rect_finestra: None,
             in_pausa: false,
-        });
+        })
+    };
+    let mut scansione = Scansione::new(&leggi_stato().cfg);
+
+    loop {
+        let stato = leggi_stato();
         let intervallo = stato.cfg.interval_ms;
 
         if stato.in_pausa || !stato.cfg.enabled {
@@ -67,24 +73,66 @@ fn ciclo(
             continue;
         }
 
+        // Recepisce le modifiche fatte dal menu mentre il talk è in corso.
+        if scansione.aggiorna_config(&stato.cfg)
+            && tx.send(Messaggio::ZonaCambiata(scansione.zona())).is_err()
+        {
+            return;
+        }
+
+        scansione.imposta_overlay(stato.rect_finestra.and_then(|r| {
+            zona_overlay(&stato.cfg, stato.centro_finestra, r)
+        }));
+
+        let cfg_zona = con_zona(&stato.cfg, scansione.zona());
         let msg = match leggi(
             &motore,
-            &stato.cfg,
+            &cfg_zona,
             stato.centro_finestra,
             percorso_debug.as_deref(),
         ) {
-            Ok(testo) => match interpreta(&testo) {
-                Some(l) => Messaggio::Lettura(l),
-                None => Messaggio::Niente(testo),
+            Ok(testo) => match scansione.registra(interpreta(&testo)) {
+                Esito::Accetta(l) => Some(Messaggio::Lettura(l)),
+                // Numero da confermare: meglio un frame di silenzio che una slide sbagliata.
+                Esito::Verifica => None,
+                Esito::Ruota(z) => Some(Messaggio::ZonaCambiata(z)),
+                Esito::Niente => Some(Messaggio::Niente(testo)),
             },
-            Err(e) => Messaggio::Errore(e),
+            Err(e) => Some(Messaggio::Errore(e)),
         };
-        if tx.send(msg).is_err() {
-            return; // l'interfaccia è stata chiusa
+        if let Some(msg) = msg {
+            if tx.send(msg).is_err() {
+                return; // l'interfaccia è stata chiusa
+            }
+            ctx.request_repaint();
         }
-        ctx.request_repaint();
         std::thread::sleep(Duration::from_millis(intervallo));
     }
+}
+
+/// Posizione della finestra del Ritardometro sul monitor catturato, in frazioni
+/// di schermo: le zone che la coprono vanno evitate, altrimenti l'OCR legge il
+/// numero di slide che l'overlay stesso sta mostrando.
+fn zona_overlay(
+    cfg: &OcrConfig,
+    centro_finestra: Option<(i32, i32)>,
+    rect: (i32, i32, i32, i32),
+) -> Option<Zona> {
+    let m = scegli_monitor(cfg.monitor, centro_finestra).ok()?;
+    let mx = m.x().ok()?;
+    let my = m.y().ok()?;
+    let w = m.width().ok()? as f32;
+    let h = m.height().ok()? as f32;
+    let (sinistra, alto, destra, basso) = rect;
+    if w <= 0.0 || h <= 0.0 || destra <= sinistra || basso <= alto {
+        return None;
+    }
+    Some(Zona {
+        x: (sinistra - mx) as f32 / w,
+        y: (alto - my) as f32 / h,
+        width: (destra - sinistra) as f32 / w,
+        height: (basso - alto) as f32 / h,
+    })
 }
 
 fn leggi(
