@@ -68,6 +68,14 @@ pub enum Posizione {
 }
 
 impl Posizione {
+    /// Le quattro posizioni, nell'ordine in cui le mostra il menu.
+    pub const TUTTE: [Posizione; 4] = [
+        Posizione::TopLeft,
+        Posizione::TopRight,
+        Posizione::BottomLeft,
+        Posizione::BottomRight,
+    ];
+
     /// Nome come appare nel file di configurazione.
     pub fn nome(self) -> &'static str {
         match self {
@@ -204,6 +212,9 @@ pub struct Caricata {
     /// Falso quando il file esiste ma non si è riusciti a leggerlo o a
     /// interpretarlo: riscriverlo cancellerebbe la configurazione dell'utente.
     pub salvabile: bool,
+    /// Chiavi imposte dalla riga di comando per questa esecuzione: valgono
+    /// adesso, ma non vanno scritte nel file.
+    pub da_cli: Vec<&'static str>,
 }
 
 /// Percorso di default: `ritardometro.toml` accanto all'eseguibile.
@@ -230,6 +241,7 @@ pub fn carica(percorso: &Path) -> Caricata {
                 percorso: percorso.to_path_buf(),
                 avviso: None,
                 salvabile: true,
+                da_cli: Vec::new(),
             },
             Err(e) => Caricata {
                 config: Config::default(),
@@ -238,6 +250,7 @@ pub fn carica(percorso: &Path) -> Caricata {
                     "Error in config file, falling back to defaults:\n{e}"
                 )),
                 salvabile: false,
+                da_cli: Vec::new(),
             },
         },
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
@@ -249,6 +262,7 @@ pub fn carica(percorso: &Path) -> Caricata {
                 percorso: percorso.to_path_buf(),
                 avviso: avviso.clone(),
                 salvabile: avviso.is_none(),
+                da_cli: Vec::new(),
             }
         }
         Err(e) => Caricata {
@@ -256,6 +270,7 @@ pub fn carica(percorso: &Path) -> Caricata {
             percorso: percorso.to_path_buf(),
             avviso: Some(format!("Could not read {}: {e}", percorso.display())),
             salvabile: false,
+            da_cli: Vec::new(),
         },
     }
 }
@@ -390,7 +405,11 @@ fn imposta_milestone(testo: &str, lista: &[MilestoneConfig]) -> String {
 
 /// Applica al testo del file tutte le impostazioni modificabili dal menu,
 /// che da quando il menu le copre tutte vuol dire: tutte.
-pub fn aggiorna_testo(testo: &str, cfg: &Config) -> String {
+///
+/// `salta` elenca le chiavi da lasciare come stanno nel file: ci finiscono
+/// quelle imposte per questa sola esecuzione dalla riga di comando, che non
+/// devono diventare la nuova configurazione permanente.
+pub fn aggiorna_testo(testo: &str, cfg: &Config, salta: &[&str]) -> String {
     let mut t = testo.to_string();
     for (sezione, chiave, valore) in [
         (None, "duration_minutes", numero(cfg.duration_minutes)),
@@ -416,6 +435,9 @@ pub fn aggiorna_testo(testo: &str, cfg: &Config) -> String {
         (Some("ocr"), "magnification", cfg.ocr.magnification.to_string()),
         (Some("ocr"), "save_debug", cfg.ocr.save_debug.to_string()),
     ] {
+        if sezione.is_none() && salta.contains(&chiave) {
+            continue;
+        }
         t = imposta_chiave(&t, sezione, chiave, &valore);
     }
     if let Some(f) = cfg.window {
@@ -431,9 +453,9 @@ pub fn aggiorna_testo(testo: &str, cfg: &Config) -> String {
 /// mentre il programma è aperto non viene persa (vince comunque chi scrive per
 /// ultimo sulle chiavi in conflitto), e scrive su un file temporaneo che poi
 /// rinomina: un'interruzione a metà non lascia una configurazione monca.
-pub fn salva(percorso: &Path, cfg: &Config) -> Result<(), String> {
+pub fn salva(percorso: &Path, cfg: &Config, salta: &[&str]) -> Result<(), String> {
     let attuale = std::fs::read_to_string(percorso).unwrap_or_else(|_| TEMPLATE.to_string());
-    let nuovo = aggiorna_testo(&attuale, cfg);
+    let nuovo = aggiorna_testo(&attuale, cfg, salta);
     if nuovo == attuale {
         return Ok(());
     }
@@ -493,7 +515,7 @@ fn config_personalizzata() -> Config {
     #[test]
     fn ogni_impostazione_del_menu_torna_indietro_dal_file() {
         let c = config_personalizzata();
-        let scritta = aggiorna_testo(TEMPLATE, &c);
+        let scritta = aggiorna_testo(TEMPLATE, &c, &[]);
         let riletta = da_testo(&scritta).expect("il file deve restare valido");
 
         assert_eq!(riletta.duration_minutes, c.duration_minutes);
@@ -527,12 +549,25 @@ fn config_personalizzata() -> Config {
     }
 
     #[test]
+    fn le_chiavi_dalla_riga_di_comando_non_finiscono_nel_file() {
+        // `--minutes 45 --slides 64` vale per questa esecuzione, non per sempre
+        let c = config_personalizzata();
+        let t = aggiorna_testo(TEMPLATE, &c, &["duration_minutes", "total_slides"]);
+        let riletta = da_testo(&t).unwrap();
+        assert_eq!(riletta.duration_minutes, 30.0, "resta quella del file");
+        assert_eq!(riletta.total_slides, 30, "resta quella del file");
+        // tutto il resto viene salvato lo stesso
+        assert_eq!(riletta.scale, c.scale);
+        assert_eq!(riletta.position, c.position);
+    }
+
+    #[test]
     fn le_milestone_si_riscrivono_senza_duplicarsi() {
         let c = config_personalizzata();
-        let primo = aggiorna_testo(TEMPLATE, &c);
+        let primo = aggiorna_testo(TEMPLATE, &c, &[]);
         assert_eq!(primo.matches("[[milestone]]").count(), 2);
         // un secondo salvataggio sullo stesso file non accumula blocchi
-        let secondo = aggiorna_testo(&primo, &c);
+        let secondo = aggiorna_testo(&primo, &c, &[]);
         assert_eq!(secondo.matches("[[milestone]]").count(), 2);
         let riletta = da_testo(&secondo).unwrap();
         assert_eq!(riletta.milestone, c.milestone);
@@ -546,7 +581,7 @@ fn config_personalizzata() -> Config {
             milestone: Vec::new(),
             ..Config::default()
         };
-        let t = aggiorna_testo(TEMPLATE, &c);
+        let t = aggiorna_testo(TEMPLATE, &c, &[]);
         assert!(!t.contains("[[milestone]]"));
         assert!(da_testo(&t).unwrap().milestone.is_empty());
     }
@@ -562,7 +597,7 @@ fn config_personalizzata() -> Config {
             },
             ..Config::default()
         };
-        let nuovo = aggiorna_testo(TEMPLATE, &c);
+        let nuovo = aggiorna_testo(TEMPLATE, &c, &[]);
 
         // I commenti del template restano tutti
         for riga in TEMPLATE.lines().filter(|r| r.trim_start().starts_with('#')) {
@@ -615,7 +650,7 @@ fn config_personalizzata() -> Config {
             window: Some(FinestraSalvata { x: 1920, y: -40 }),
             ..Config::default()
         };
-        let t = aggiorna_testo(TEMPLATE, &c);
+        let t = aggiorna_testo(TEMPLATE, &c, &[]);
         assert!(t.contains("[window]"));
         let riletta = da_testo(&t).unwrap();
         assert_eq!(riletta.window, Some(FinestraSalvata { x: 1920, y: -40 }));
@@ -625,7 +660,7 @@ fn config_personalizzata() -> Config {
             window: Some(FinestraSalvata { x: 10, y: 20 }),
             ..riletta
         };
-        let t2 = aggiorna_testo(&t, &c2);
+        let t2 = aggiorna_testo(&t, &c2, &[]);
         assert_eq!(t2.matches("[window]").count(), 1);
         assert_eq!(
             da_testo(&t2).unwrap().window,
