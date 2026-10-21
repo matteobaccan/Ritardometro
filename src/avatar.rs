@@ -49,6 +49,8 @@ pub struct StatoAvatar {
     pub alza_rosso: f32,
     pub sudore: bool,
     pub applauso: bool,
+    /// Intensità del gesto "guarda l'orologio": 0 = niente, 1 = picchietta forte.
+    pub tocca_polso: f32,
     pub opacita: f32,
     pub bandiera: Option<Bandiera>,
 }
@@ -61,6 +63,7 @@ impl Default for StatoAvatar {
             alza_rosso: 0.2,
             sudore: false,
             applauso: false,
+            tocca_polso: 0.0,
             opacita: 1.0,
             bandiera: None,
         }
@@ -404,6 +407,11 @@ pub fn disegna(painter: &Painter, rect: Rect, stato: &StatoAvatar, t: f32) {
         disegna_applauso(&tela, t);
     }
 
+    // 6-bis) Picchietta sull'orologio: sta andando lungo sulla stessa slide
+    if stato.tocca_polso > 0.02 {
+        disegna_tocca_polso(&tela, stato.tocca_polso, t);
+    }
+
     // 7) Gocce di sudore in stile fumetto quando è nel panico
     if stato.sudore {
         disegna_sudore_comic(&tela, &deforma_uv, t);
@@ -513,6 +521,81 @@ fn disegna_applauso(tela: &Tela, t: f32) {
             FontId::proportional(tela.s(scala_t)),
             tela.col(GIALLO),
         );
+    }
+}
+
+/// Gesto "guarda l'orologio": l'avatar alza l'avambraccio e picchietta con
+/// l'indice sul quadrante. È il segnale per le presentazioni senza numerazione,
+/// dove non sappiamo la slide ma sappiamo che la schermata non cambia da troppo.
+///
+/// `forza` (0..1) fa salire il braccio e accelera il picchiettio.
+fn disegna_tocca_polso(tela: &Tela, forza: f32, t: f32) {
+    let f = forza.clamp(0.0, 1.0);
+    // Il braccio entra dal basso man mano che il ritardo cresce
+    let salita = (1.0 - f) * 26.0;
+
+    // Centro del quadrante
+    let qx = 116.0;
+    let qy = 186.0 + salita;
+
+    // Avambraccio che arriva da sinistra, con il polso sotto l'orologio
+    let gomito = (54.0, qy + 20.0);
+    let polso = (qx - 9.0, qy + 3.0);
+    tela.linea(gomito, polso, 17.0, INCHIOSTRO);
+    tela.linea(gomito, polso, 12.5, PELLE_PALPEBRA);
+    tela.linea(
+        (gomito.0, gomito.1 + 3.0),
+        (polso.0 - 2.0, polso.1 + 3.0),
+        4.0,
+        PELLE_OMBRA,
+    );
+
+    // Cinturino sopra e sotto il quadrante
+    for dy in [-10.5_f32, 10.5] {
+        tela.linea((qx - 9.0, qy + dy * 0.55), (qx + 7.0, qy + dy), 9.0, INCHIOSTRO);
+    }
+
+    // Quadrante
+    tela.cerchio(qx + 1.2, qy + 1.8, 14.0, INCHIOSTRO);
+    tela.cerchio(qx, qy, 14.0, INCHIOSTRO);
+    tela.cerchio(qx, qy, 11.6, Color32::from_rgb(242, 240, 232));
+    tela.cerchio(qx - 3.6, qy - 3.8, 3.0, Color32::from_white_alpha(140));
+
+    // Lancette: ore e minuti fermi, secondi che girano (il tempo che passa)
+    for (angolo, lunghezza, spessore) in [
+        (-2.30_f32, 5.6_f32, 2.8_f32),
+        (-0.75, 8.2, 2.4),
+        (t * 1.2 - std::f32::consts::FRAC_PI_2, 9.0, 1.4),
+    ] {
+        let (sin, cos) = angolo.sin_cos();
+        tela.linea(
+            (qx, qy),
+            (qx + cos * lunghezza, qy + sin * lunghezza),
+            spessore,
+            INCHIOSTRO,
+        );
+    }
+    tela.cerchio(qx, qy, 1.8, INCHIOSTRO);
+
+    // Indice dell'altra mano che picchietta sul vetro
+    let battito = (t * (4.0 + 3.0 * f)).sin().abs();
+    let stacco = 3.0 + battito * 7.0;
+    let punta = (qx + 2.0, qy - 13.0 - stacco);
+    let nocca = (qx + 26.0, qy - 30.0 - stacco * 0.5);
+    tela.linea(nocca, punta, 8.6, INCHIOSTRO);
+    tela.linea(nocca, punta, 5.6, PELLE_PALPEBRA);
+    tela.cerchio(nocca.0 + 4.0, nocca.1 + 2.0, 8.5, INCHIOSTRO);
+    tela.cerchio(nocca.0 + 4.0, nocca.1 + 2.0, 6.6, PELLE_PALPEBRA);
+
+    // Lineette d'impatto quando il dito tocca il vetro
+    let impatto = (1.0 - battito * 2.2).clamp(0.0, 1.0);
+    if impatto > 0.05 {
+        for (dx, dy) in [(-9.0_f32, -7.0_f32), (0.0, -11.0), (9.0, -7.0)] {
+            let p0 = (qx + dx * 0.75, qy + dy * 0.75 - 6.0);
+            let p1 = (qx + dx * (0.9 + impatto * 0.5), qy + dy * (0.9 + impatto * 0.5) - 6.0);
+            tela.linea(p0, p1, 2.6, INCHIOSTRO);
+            tela.linea(p0, p1, 1.4, GIALLO);
+        }
     }
 }
 

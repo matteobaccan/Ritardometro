@@ -25,6 +25,8 @@ The core philosophy is **one slide per minute** (or your custom slide pacing rat
 2. The native OCR engine extracts the current slide and total (e.g. `14 / 35`).
 3. Ritardometro calculates your time difference in seconds, updates the animated avatar, and adjusts the progress gauge.
 
+When the slides carry no counter at all (so there is nothing to read), Ritardometro watches the screen instead: if it does not change for longer than `stuck_factor` times the average time per slide (`duration / total_slides`), the avatar taps their wrist to tell you that you are dwelling. This runs on Windows and macOS; on macOS the system asks for Screen Recording permission the first time, and `stuck_factor = 0` turns the whole thing off.
+
 ## Installation
 
 Download the archive for your operating system from the [Releases page](https://github.com/matteobaccan/Ritardometro/releases/latest) and extract it anywhere:
@@ -146,6 +148,8 @@ panic_seconds = 180       # Seconds behind schedule before avatar panics
 scale = 1.0               # Initial overlay scale factor
 background_opacity = 0.70 # HUD background box opacity (0.0 - 1.0)
 opacity = 1.0             # Avatar and text opacity (0.15 - 1.0)
+stuck_factor = 1.5        # No slide counter: tap the wrist after this many times the
+                          # average time per slide (0 = never watch the screen)
 position = "top-right"    # Initial corner: "top-left", "top-right", "bottom-left", "bottom-right"
 margin = 24               # Margin from screen edge in points
 

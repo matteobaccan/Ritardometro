@@ -14,6 +14,7 @@ mod avatar;
 mod config;
 mod ocr;
 mod pacing;
+mod schermo;
 
 use eframe::egui;
 use std::path::PathBuf;

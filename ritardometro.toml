@@ -22,6 +22,11 @@ tolerance_seconds = 60
 # Panic threshold in seconds behind schedule before the avatar panics
 panic_seconds = 180
 
+# Presentations without a slide counter: if the screen does not change for this
+# many times the average time per slide, the avatar taps their wrist to tell you
+# you are dwelling. Needs total_slides above. 0 = do not watch the screen at all.
+stuck_factor = 1.5
+
 # Overlay scale (1.0 = standard, 1.5 = larger)
 scale = 1.0
 

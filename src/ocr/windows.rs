@@ -3,6 +3,8 @@
 
 use super::{con_zona, interpreta, Esito, Messaggio, Scansione, StatoOcrCondiviso, Zona};
 use crate::config::OcrConfig;
+use crate::schermo::scegli_monitor;
+use xcap::Monitor;
 use image::{imageops::FilterType, DynamicImage, GrayImage, Luma};
 use std::sync::mpsc::{channel, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -11,7 +13,6 @@ use windows::Graphics::Imaging::{BitmapPixelFormat, SoftwareBitmap};
 use windows::Media::Ocr::OcrEngine;
 use windows::Storage::Streams::DataWriter;
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
-use xcap::Monitor;
 
 /// Lato massimo dell'immagine passata all'OCR: oltre ~900 px di larghezza su un ritaglio
 /// del 15% (es. su monitor 4K/HiDPI con ingrandimento 3x -> 1725 px), i caratteri diventano
@@ -182,36 +183,6 @@ fn leggi(
     }
 
     Ok(testo)
-}
-
-fn scegli_monitor(indice: usize, centro_finestra: Option<(i32, i32)>) -> Result<Monitor, String> {
-    if indice == 0 {
-        // Se conosciamo la posizione della finestra del Ritardometro, usiamo lo schermo
-        // su cui si trova la finestra!
-        if let Some((cx, cy)) = centro_finestra {
-            if let Ok(m) = Monitor::from_point(cx, cy) {
-                return Ok(m);
-            }
-        }
-        let monitor = Monitor::all().map_err(|e| format!("Monitors not found: {e}"))?;
-        monitor
-            .iter()
-            .find(|m| m.is_primary().unwrap_or(false))
-            .or_else(|| monitor.first())
-            .cloned()
-            .ok_or_else(|| "No monitor found".into())
-    } else {
-        let monitor = Monitor::all().map_err(|e| format!("Monitors not found: {e}"))?;
-        let n = monitor.len();
-        monitor
-            .into_iter()
-            .nth(indice - 1)
-            .ok_or_else(|| format!("Monitor {indice} does not exist ({n} found)"))
-    }
-}
-
-pub fn numero_monitor() -> usize {
-    Monitor::all().map(|m| m.len().max(1)).unwrap_or(1)
 }
 
 pub fn info_zona_ocr(
