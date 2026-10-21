@@ -1,6 +1,6 @@
 [package]
 name = "ritardometro"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
 description = "Always-on-top speaker pacing timer: tracks your current slide via screen OCR, tells you if you're ahead or behind, with an animated avatar cheering you on"
 license = "MIT"
