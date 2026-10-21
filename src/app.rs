@@ -984,11 +984,14 @@ impl Ritardometro {
             return;
         }
 
-        let dim_menu = Vec2::new(430.0, 600.0);
+        // Comoda all'apertura, ma riducibile: su un portatile da 768 px di
+        // altezza una finestra fissa da 700 coprirebbe mezzo schermo.
+        let dim_menu = Vec2::new(500.0, 700.0);
+        let minimo = Vec2::new(430.0, 420.0);
         let mut builder = egui::ViewportBuilder::default()
             .with_title(concat!("Ritardometro v", env!("CARGO_PKG_VERSION"), " — Settings"))
             .with_inner_size(dim_menu)
-            .with_min_inner_size(dim_menu)
+            .with_min_inner_size(minimo)
             .with_resizable(true)
             .with_minimize_button(false)
             .with_maximize_button(false)
@@ -1034,28 +1037,39 @@ impl Ritardometro {
             if ui.button("Reset (R)").clicked() {
                 self.azzera();
             }
-            ui.separator();
-            ui.label("Time:");
-            if ui.button("−1").clicked() {
-                self.crono.correggi(-60.0);
-            }
-            if ui.button("+1").clicked() {
-                self.crono.correggi(60.0);
-            }
-            ui.separator();
-            ui.label("Slide:");
-            if ui.button("−1").clicked() {
-                let s = self.slide_letta.unwrap_or(2).saturating_sub(1).max(1);
-                self.imposta_slide(s, FonteSlide::Manuale);
-            }
-            if ui.button("+1").clicked() {
-                let s = self.slide_letta.unwrap_or(0) + 1;
-                self.imposta_slide(s, FonteSlide::Manuale);
-            }
-            if let Some(sl) = self.slide() {
-                ui.label(format!("({sl}/{})", self.totale().unwrap_or(0)));
-            }
         });
+        ui.add_space(4.0);
+        egui::Grid::new("comandi_dal_vivo")
+            .num_columns(2)
+            .spacing([12.0, 6.0])
+            .show(ui, |ui| {
+                ui.label("Time:");
+                ui.horizontal(|ui| {
+                    if ui.button("−1 min").clicked() {
+                        self.crono.correggi(-60.0);
+                    }
+                    if ui.button("+1 min").clicked() {
+                        self.crono.correggi(60.0);
+                    }
+                });
+                ui.end_row();
+
+                ui.label("Slide:");
+                ui.horizontal(|ui| {
+                    if ui.button("−1").clicked() {
+                        let s = self.slide_letta.unwrap_or(2).saturating_sub(1).max(1);
+                        self.imposta_slide(s, FonteSlide::Manuale);
+                    }
+                    if ui.button("+1").clicked() {
+                        let s = self.slide_letta.unwrap_or(0) + 1;
+                        self.imposta_slide(s, FonteSlide::Manuale);
+                    }
+                    if let Some(sl) = self.slide() {
+                        ui.label(format!("({sl}/{})", self.totale().unwrap_or(0)));
+                    }
+                });
+                ui.end_row();
+            });
 
         ui.separator();
 
@@ -1097,6 +1111,7 @@ impl Ritardometro {
                 egui::RichText::new(format!("Ritardometro v{}", env!("CARGO_PKG_VERSION")))
                     .strong(),
             );
+            ui.label("· By Matteo Baccan ·");
             if ui
                 .link("GitHub")
                 .on_hover_text(env!("CARGO_PKG_REPOSITORY"))
