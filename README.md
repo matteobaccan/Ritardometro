@@ -200,7 +200,7 @@ Anything you change in the Settings window — size, transparency, OCR on/off, m
 
 | File | Role |
 |---|---|
-| `src/main.rs` | CLI arguments, window setup and entry point |
+| `src/main.rs` | CLI arguments, window setup (including the caricature as window icon) and entry point |
 | `src/app.rs` | Main overlay application: talk state machine, rendering, resizing, multi-monitor dragging, settings window |
 | `src/avatar.rs` | Animated 2D deformable mesh caricature (facial expressions, breathing, sweat drops, comic speech balloons, pulsing watch) |
 | `src/pacing.rs` | Pure pacing logic: stopwatch, delta calculation, pacing judgments, milestones, how long a slide reading stays trustworthy (with unit tests) |

@@ -64,6 +64,46 @@ fn argomenti() -> Result<Argomenti, String> {
     Ok(a)
 }
 
+/// Icona della finestra: la testa della caricatura.
+///
+/// Si ritaglia dall'immagine che l'avatar usa già, così non c'è un secondo
+/// file da tenere allineato. Le frazioni inquadrano la testa con un filo
+/// d'aria sopra: a 16 pixel nella barra delle applicazioni si riconosce
+/// ancora, cosa che un mezzobusto intero non farebbe.
+fn icona_finestra() -> Option<egui::IconData> {
+    /// Centro del ritaglio e suo lato, in frazioni dell'immagine.
+    const CENTRO_X: f32 = 0.504;
+    const CENTRO_Y: f32 = 0.295;
+    const LATO: f32 = 0.80;
+    const PIXEL: u32 = 256;
+
+    let immagine = image::load_from_memory(avatar::PNG_CARICATURA)
+        .ok()?
+        .into_rgba8();
+    let (larghezza, altezza) = immagine.dimensions();
+    let lato = ((LATO * larghezza as f32) as u32)
+        .min(larghezza)
+        .min(altezza)
+        .max(1);
+    let x = (((CENTRO_X * larghezza as f32) as i64) - lato as i64 / 2)
+        .clamp(0, (larghezza - lato) as i64) as u32;
+    let y = (((CENTRO_Y * altezza as f32) as i64) - lato as i64 / 2)
+        .clamp(0, (altezza - lato) as i64) as u32;
+
+    let testa = image::imageops::crop_imm(&immagine, x, y, lato, lato).to_image();
+    let icona = image::imageops::resize(
+        &testa,
+        PIXEL,
+        PIXEL,
+        image::imageops::FilterType::CatmullRom,
+    );
+    Some(egui::IconData {
+        rgba: icona.into_raw(),
+        width: PIXEL,
+        height: PIXEL,
+    })
+}
+
 fn main() -> eframe::Result {
     let (args, errore_args) = match argomenti() {
         Ok(a) => (a, None),
@@ -92,15 +132,20 @@ fn main() -> eframe::Result {
 
     let demo = args.demo;
     let scala = caricata.config.scale;
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("Ritardometro")
+        .with_inner_size([app::LARGHEZZA * scala, app::ALTEZZA * scala])
+        .with_resizable(false)
+        .with_decorations(false)
+        .with_transparent(true)
+        .with_always_on_top()
+        .with_taskbar(true);
+    if let Some(icona) = icona_finestra() {
+        viewport = viewport.with_icon(icona);
+    }
+
     let opzioni = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("Ritardometro")
-            .with_inner_size([app::LARGHEZZA * scala, app::ALTEZZA * scala])
-            .with_resizable(false)
-            .with_decorations(false)
-            .with_transparent(true)
-            .with_always_on_top()
-            .with_taskbar(true),
+        viewport,
         renderer: eframe::Renderer::Glow,
         ..Default::default()
     };
@@ -110,4 +155,19 @@ fn main() -> eframe::Result {
         opzioni,
         Box::new(move |cc| Ok(Box::new(app::Ritardometro::new(cc, caricata, demo)))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn l_icona_esce_quadrata_e_piena() {
+        let icona = icona_finestra().expect("la caricatura deve essere decodificabile");
+        assert_eq!((icona.width, icona.height), (256, 256));
+        assert_eq!(icona.rgba.len(), 256 * 256 * 4);
+        // il ritaglio prende la testa, non un angolo vuoto: in mezzo c'è roba opaca
+        let centro = (256 * 128 + 128) * 4;
+        assert_eq!(icona.rgba[centro + 3], 255, "il centro dell'icona è trasparente");
+    }
 }
