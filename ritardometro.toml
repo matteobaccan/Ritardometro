@@ -45,6 +45,11 @@ enabled = true
 # Monitor to capture: 0 = auto (follows Ritardometro overlay), 1 = first monitor, 2 = second, ...
 monitor = 0
 
+# If the rectangle below reads nothing for a few seconds, look for the slide
+# counter in the other corners of the screen and lock onto the one that works.
+# false = always capture the rectangle below, nothing else
+auto_zone = true
+
 # Screen rectangle where slide counter appears, in fractions of screen size
 # (0.0 = left/top edge, 1.0 = right/bottom edge).
 # Default: bottom-right corner where Marp and PDF viewers show pagination.

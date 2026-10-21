@@ -58,6 +58,9 @@ pub struct OcrConfig {
     #[serde(alias = "attivo")]
     pub enabled: bool,
     pub monitor: usize,
+    /// Se la zona configurata non legge nulla, cerca il contatore negli altri angoli.
+    #[serde(alias = "zona_automatica")]
+    pub auto_zone: bool,
     pub x: f32,
     pub y: f32,
     #[serde(alias = "larghezza")]
@@ -119,6 +122,7 @@ impl Default for OcrConfig {
         Self {
             enabled: true,
             monitor: 0,
+            auto_zone: true,
             x: 0.85,
             y: 0.88,
             width: 0.15,
@@ -226,6 +230,7 @@ mod tests {
         assert_eq!(da_file.total_slides, def.total_slides);
         assert_eq!(da_file.position, def.position);
         assert_eq!(da_file.ocr.x, def.ocr.x);
+        assert_eq!(da_file.ocr.auto_zone, def.ocr.auto_zone);
         assert_eq!(da_file.ocr.interval_ms, def.ocr.interval_ms);
         assert_eq!(da_file.milestone, def.milestone);
     }

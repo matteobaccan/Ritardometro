@@ -258,6 +258,9 @@ pub struct Ritardometro {
     ocr_rx: Option<Receiver<Messaggio>>,
     ocr_condiviso: Arc<Mutex<StatoOcrCondiviso>>,
     stato_ocr: String,
+    /// Zona dello schermo realmente catturata: cambia quando la ricerca
+    /// automatica trova il contatore in un altro angolo.
+    zona_ocr: Option<ocr::Zona>,
 
     posizionato: bool,
     resize_attivo: Option<(egui::ResizeDirection, Pos2, f32)>,
@@ -303,6 +306,7 @@ impl Ritardometro {
         let ocr_condiviso = Arc::new(Mutex::new(StatoOcrCondiviso {
             cfg: cfg.ocr.clone(),
             centro_finestra: None,
+            rect_finestra: None,
             in_pausa: false,
         }));
 
@@ -335,6 +339,7 @@ impl Ritardometro {
             ocr_rx,
             ocr_condiviso,
             stato_ocr,
+            zona_ocr: None,
             posizionato: false,
             resize_attivo: None,
             #[cfg(windows)]
@@ -454,9 +459,10 @@ impl Ritardometro {
                         if self.slide != Some(l.slide) {
                             self.imposta_slide(l.slide);
                         }
+                        let dove = self.suffisso_zona();
                         self.stato_ocr = match self.totale() {
-                            Some(tot) => format!("OCR ok: slide {}/{tot}", l.slide),
-                            None => format!("OCR ok: slide {}", l.slide),
+                            Some(tot) => format!("OCR ok: slide {}/{tot}{dove}", l.slide),
+                            None => format!("OCR ok: slide {}{dove}", l.slide),
                         };
                     }
                 }
@@ -469,7 +475,30 @@ impl Ritardometro {
                     };
                 }
                 Messaggio::Errore(e) => self.stato_ocr = e,
+                Messaggio::ZonaCambiata(z) => {
+                    self.zona_ocr = Some(z);
+                    self.stato_ocr = format!("OCR: looking for counter ({})", z.etichetta());
+                }
             }
+        }
+    }
+
+    /// `" @ bottom-left"` quando la ricerca automatica ha spostato la cattura
+    /// rispetto alla zona scritta nel file di configurazione.
+    fn suffisso_zona(&self) -> String {
+        match self.zona_ocr {
+            Some(z) if !z.vicina(&ocr::Zona::da_config(&self.cfg.ocr)) => {
+                format!(" @ {}", z.etichetta())
+            }
+            _ => String::new(),
+        }
+    }
+
+    /// Configurazione OCR con la zona davvero in uso, per evidenziarla sullo schermo.
+    fn ocr_cfg_effettiva(&self) -> crate::config::OcrConfig {
+        match self.zona_ocr {
+            Some(z) => ocr::con_zona(&self.cfg.ocr, z),
+            None => self.cfg.ocr.clone(),
         }
     }
 
@@ -577,7 +606,7 @@ impl Ritardometro {
             return;
         }
 
-        let dim_menu = Vec2::new(380.0, 585.0);
+        let dim_menu = Vec2::new(380.0, 615.0);
         let mut builder = egui::ViewportBuilder::default()
             .with_title(concat!("Ritardometro v", env!("CARGO_PKG_VERSION"), " — Settings"))
             .with_inner_size(dim_menu)
@@ -715,6 +744,27 @@ impl Ritardometro {
                 }
                 ui.end_row();
 
+                ui.label("Auto-detect:");
+                if ui
+                    .checkbox(
+                        &mut self.cfg.ocr.auto_zone,
+                        "Find the slide counter in any corner",
+                    )
+                    .on_hover_text(
+                        "If the configured area reads nothing for a few seconds, scan the other \
+                         corners and lock onto the one showing the slide counter",
+                    )
+                    .changed()
+                {
+                    if !self.cfg.ocr.auto_zone {
+                        self.zona_ocr = None;
+                    }
+                    self.sincronizza_ocr_condiviso();
+                    self.avvia_evidenziazione_ocr();
+                    ctx_root.request_repaint();
+                }
+                ui.end_row();
+
                 ui.label("OCR Rate:");
                 ui.horizontal(|ui| {
                     for (ms, etichetta) in [(200_u64, "200 ms (fast)"), (350, "350 ms"), (500, "500 ms")] {
@@ -823,7 +873,7 @@ impl Ritardometro {
             .lock()
             .ok()
             .and_then(|s| s.centro_finestra);
-        if let Some(info) = ocr::info_zona_ocr(&self.cfg.ocr, centro) {
+        if let Some(info) = ocr::info_zona_ocr(&self.ocr_cfg_effettiva(), centro) {
             self.evidenzia_ocr = Some((Instant::now(), info));
         }
     }
@@ -909,24 +959,29 @@ impl Ritardometro {
     }
 
     fn aggiorna_centro_finestra_ocr(&self, ctx: &egui::Context) {
-        let mut centro: Option<(i32, i32)> = None;
+        let mut riquadro: Option<(i32, i32, i32, i32)> = None;
         #[cfg(windows)]
         if self.hwnd_principale != 0 {
             let mut rect = win32_drag::Rect::default();
             if unsafe { win32_drag::GetWindowRect(self.hwnd_principale, &mut rect) } != 0 {
-                centro = Some(((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2));
+                riquadro = Some((rect.left, rect.top, rect.right, rect.bottom));
             }
         }
-        if centro.is_none() {
+        if riquadro.is_none() {
             if let Some(outer) = ctx.input(|i| i.viewport().outer_rect) {
                 let ppp = ctx.pixels_per_point();
-                let c = outer.center();
-                centro = Some(((c.x * ppp) as i32, (c.y * ppp) as i32));
+                riquadro = Some((
+                    (outer.left() * ppp) as i32,
+                    (outer.top() * ppp) as i32,
+                    (outer.right() * ppp) as i32,
+                    (outer.bottom() * ppp) as i32,
+                ));
             }
         }
         if let Ok(mut s) = self.ocr_condiviso.lock() {
-            if let Some(c) = centro {
-                s.centro_finestra = Some(c);
+            if let Some(r @ (sinistra, alto, destra, basso)) = riquadro {
+                s.centro_finestra = Some(((sinistra + destra) / 2, (alto + basso) / 2));
+                s.rect_finestra = Some(r);
             }
             s.in_pausa = self.in_pausa();
         }
