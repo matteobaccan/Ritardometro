@@ -140,7 +140,7 @@ jobs:
             | macOS Intel | `ritardometro-${{ env.TAG }}-macos-x64.tar.gz` |
 
             > Automatic slide detection via screen OCR is supported on Windows.
-            > On macOS, Ritardometro watches the screen instead and taps its wrist when a slide overstays
+            > On macOS, Ritardometro watches the screen instead and shows a pulsing watch when a slide overstays
             > (macOS asks for Screen Recording permission on first run).
             > On Linux it operates as a full pacing timer (manual slide navigation via ← → arrow keys).
             >

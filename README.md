@@ -27,7 +27,7 @@ The core philosophy is **one slide per minute** (or your custom slide pacing rat
 
 A slide number is only shown, and only used for pacing, while it is still being confirmed. If the OCR stops finding the counter — a full-bleed slide, a section divider, OCR switched off — the last number is kept for about one and a half slides and then dropped: without it the slide you are on cannot be known, and a frozen number would show a delay that grows on its own without anyone having said anything wrong. Ritardometro then goes back to being an honest stopwatch (a slide number you set by hand with the ← → arrow keys is yours, and never expires).
 
-When the slides carry no counter at all (so there is nothing to read), Ritardometro watches the screen instead: if it does not change for longer than `stuck_factor` times the average time per slide (`duration / total_slides`), the avatar taps their wrist to tell you that you are dwelling. This runs on Windows and macOS; on macOS the system asks for Screen Recording permission the first time, and `stuck_factor = 0` turns the whole thing off.
+When the slides carry no counter at all (so there is nothing to read), Ritardometro watches the screen instead: if it does not change for longer than `stuck_factor` times the average time per slide (`duration / total_slides`), a pulsing watch appears next to the avatar to tell you that you are dwelling. This runs on Windows and macOS; on macOS the system asks for Screen Recording permission the first time, and `stuck_factor = 0` turns the whole thing off.
 
 ## Installation
 
@@ -152,8 +152,8 @@ panic_seconds = 180       # Seconds behind schedule before avatar panics
 scale = 1.0               # Initial overlay scale factor
 background_opacity = 0.70 # HUD background box opacity (0.0 - 1.0)
 opacity = 1.0             # Avatar and text opacity (0.15 - 1.0)
-stuck_factor = 1.5        # No slide counter: tap the wrist after this many times the
-                          # average time per slide (0 = never watch the screen)
+stuck_factor = 1.5        # No slide counter: show the pulsing watch after this many
+                          # times the average time per slide (0 = never watch the screen)
 position = "top-right"    # Initial corner: "top-left", "top-right", "bottom-left", "bottom-right"
 margin = 24               # Margin from screen edge in points
 

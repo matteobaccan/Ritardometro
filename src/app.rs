@@ -1944,7 +1944,7 @@ fn stato_avatar(
                 alza_rosso: 0.0,
                 sudore: false,
                 applauso: true,
-                tocca_polso: 0.0,
+                orologio: 0.0,
                 opacita: 1.0,
                 bandiera: Some(Bandiera {
                     testo: "Q&A?".into(),
@@ -1961,7 +1961,7 @@ fn stato_avatar(
                 alza_rosso: 0.0,
                 sudore: false,
                 applauso: true,
-                tocca_polso: 0.0,
+                orologio: 0.0,
                 opacita: 1.0,
                 bandiera: Some(Bandiera {
                     testo: "GREAT!".into(),
@@ -1978,7 +1978,7 @@ fn stato_avatar(
                 alza_rosso: 1.0,
                 sudore: true,
                 applauso: false,
-                tocca_polso: 0.0,
+                orologio: 0.0,
                 opacita: 1.0,
                 bandiera: Some(Bandiera {
                     testo: "STOP!".into(),
@@ -1995,7 +1995,7 @@ fn stato_avatar(
                 alza_rosso: 0.0,
                 sudore: false,
                 applauso: true,
-                tocca_polso: 0.0,
+                orologio: 0.0,
                 opacita: 1.0,
                 bandiera: Some(Bandiera {
                     testo: "GREAT!".into(),
@@ -2012,7 +2012,7 @@ fn stato_avatar(
                 umore: 0.35 - 0.95 * stallo,
                 alza_verde: 0.0,
                 alza_rosso: 0.0,
-                tocca_polso: stallo,
+                orologio: stallo,
                 ..Default::default()
             },
             if stallo > 0.5 { ARANCIO } else { Color32::WHITE },
@@ -2056,7 +2056,7 @@ fn stato_avatar(
                             alza_rosso: 0.45 + 0.55 * f,
                             sudore: a.ritmo == Ritmo::Panico,
                             applauso: false,
-                            tocca_polso: 0.0,
+                            orologio: 0.0,
                             opacita: 1.0,
                             bandiera: None,
                         },
