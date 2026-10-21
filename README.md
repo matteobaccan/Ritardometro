@@ -21,7 +21,7 @@ Ritardometro stays always on top of your presentation, reads your current slide 
 
 The core philosophy is **one slide per minute** (or your custom slide pacing ratio): for a 30-minute talk with 30 slides, at minute 12 you should ideally be around slide 13. Transition slides allow you to catch up, and Ritardometro gives you immediate live feedback.
 
-1. A background thread captures the screen slide counter area (by default, the bottom-right corner where Marp and PDF presentation viewers display pagination).
+1. A background thread captures the screen slide counter area (by default, the bottom-right corner where Marp and PDF presentation viewers display pagination). If nothing is readable there, it automatically scans the other corners and locks onto the one showing the counter.
 2. The native OCR engine extracts the current slide and total (e.g. `14 / 35`).
 3. Ritardometro calculates your time difference in seconds, updates the animated avatar, and adjusts the progress gauge.
 
@@ -121,6 +121,7 @@ Keys work when the overlay is focused (click on it); during your talk, your focu
 | Size − / + / 100% | Scale overlay size |
 | OCR Monitor: Auto | Captures the display where Ritardometro currently resides |
 | Detected Displays: Mon 1, Mon 2… | Pin OCR capture to a specific display |
+| Auto-detect: Find the slide counter in any corner | Scans the other corners when the configured area reads nothing, and locks onto the one with the counter |
 | Highlight OCR Zone on Screen | Flashes a spotlight border over the active OCR capture area |
 | OCR Rate | Polling interval (200 / 350 / 500 ms) |
 | Save ritardometro-debug.png | Saves raw OCR captures for tuning capture boundaries |
@@ -151,6 +152,7 @@ margin = 24               # Margin from screen edge in points
 [ocr]
 enabled = true            # false = timer-only mode (no OCR)
 monitor = 0               # 0 = auto (follows overlay monitor), 1, 2, 3... = fixed monitor
+auto_zone = true          # look for the counter in the other corners if the box below reads nothing
 # Slide counter bounding box in screen fractions (default: bottom-right corner)
 x = 0.85
 y = 0.88
@@ -174,8 +176,9 @@ You can define as many `[[milestone]]` sections as needed, using either `percent
 ### Troubleshooting OCR
 
 - OCR captures the **monitor display region** (independent of window focus): with `monitor = 0` it captures the monitor where Ritardometro is located. Use **Highlight OCR Zone on Screen** in Settings to inspect which screen and bounding box are being captured.
+- If your slides number pages somewhere other than the bottom-right corner, you normally do not need to configure anything: after a few seconds without a reading, Ritardometro scans the other corners and stays on the one where it finds the counter (the status line then shows e.g. `OCR ok: slide 12/40 @ bottom-left`). Set `auto_zone = false` to always capture the configured box only.
 - Enable **Save ritardometro-debug.png** in Settings (or `save_debug = true`) and inspect `ritardometro-debug.png`: it should tightly frame your slide counter numbers. Adjust `x`, `y`, `width`, `height` if needed.
-- Do not place the Ritardometro overlay directly on top of the slide counter to prevent self-capture.
+- Do not place the Ritardometro overlay directly on top of the slide counter: it would capture its own slide number. With `auto_zone = true` it detects the overlap and moves the capture to another corner by itself.
 - Windows OCR uses installed system language packs. If you see an OCR unavailable message, install a language pack with optical character recognition under *Settings > Time & Language > Language*.
 - In Marp presentations, a formatted counter like `12 / 40` works reliably:
 
