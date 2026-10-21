@@ -55,11 +55,11 @@ cargo build --release
 
 ## Publishing a New Version
 
-1. Bump `version` in `Cargo.toml` (e.g. `1.0.0`) and commit.
+1. Bump `version` in `Cargo.toml` (e.g. `1.1.0`) and commit.
 2. Create and push the corresponding tag:
    ```sh
-   git tag v1.0.0
-   git push origin v1.0.0
+   git tag v1.1.0
+   git push origin v1.1.0
    ```
 3. The [`release.yml`](.github/workflows/release.yml) GitHub Action automatically validates the version, cross-compiles release binaries for Windows, Linux, and macOS (Apple Silicon + Intel), generates `SHA256SUMS.txt`, and publishes the release.
 
@@ -77,7 +77,7 @@ ritardometro.exe --demo                   # demo mode: simulates a 30-minute tal
 | `file.toml` | config file to load (default: `ritardometro.toml` next to the executable) |
 | `-m N`, `--minutes N` | talk duration in minutes (accepts decimals, e.g. `12.5` or `12,5`) |
 | `-s N`, `--slides N` | total slide count (`0` = auto-detect total from screen e.g. "12 / 40") |
-| `--demo` | demo mode: accelerated 30x talk simulation without OCR |
+| `--demo` | demo mode: accelerated 30x talk simulation without OCR (also plays the pulsing watch, about 33 s in) |
 | `-h`, `--help` | display command line help |
 
 On first launch, a documented `ritardometro.toml` file is automatically created.
@@ -202,15 +202,16 @@ Anything you change in the Settings window — size, transparency, OCR on/off, m
 |---|---|
 | `src/main.rs` | CLI arguments, window setup and entry point |
 | `src/app.rs` | Main overlay application: talk state machine, rendering, resizing, multi-monitor dragging, settings window |
-| `src/avatar.rs` | Animated 2D deformable mesh caricature (facial expressions, breathing, sweat drops, comic speech balloons) |
-| `src/pacing.rs` | Pure pacing logic: stopwatch, delta calculation, pacing judgments, milestones (with unit tests) |
-| `src/ocr/` | Screen capture (`xcap`), Windows OCR integration, regex parsing |
+| `src/avatar.rs` | Animated 2D deformable mesh caricature (facial expressions, breathing, sweat drops, comic speech balloons, pulsing watch) |
+| `src/pacing.rs` | Pure pacing logic: stopwatch, delta calculation, pacing judgments, milestones, how long a slide reading stays trustworthy (with unit tests) |
+| `src/ocr/` | Screen capture (`xcap`), Windows OCR integration, regex parsing, automatic search for the slide counter zone |
+| `src/schermo.rs` | Screen-change detection for presentations without a counter: greyscale fingerprint, monitor geometry (Windows and macOS) |
 | `src/config.rs` | `ritardometro.toml` loading, validation and defaults |
 
 UI rendered via [egui/eframe](https://github.com/emilk/egui) with OpenGL (Glow) backend for rock-solid transparent window composition across Windows, Linux and macOS.
 
 ```sh
-cargo test   # run pacing logic, OCR parser, and configuration tests
+cargo test   # run pacing logic, OCR parser, screen-change detection and configuration tests
 ```
 
 ## License
