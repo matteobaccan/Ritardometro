@@ -1,7 +1,7 @@
 //! La finestra overlay: mette insieme timer, OCR, avatar e controlli.
 
 use crate::avatar::{self, Bandiera, StatoAvatar, GIALLO, ROSSO, VERDE};
-use crate::config::{Caricata, Config, FinestraSalvata, Posizione};
+use crate::config::{Caricata, Config, FinestraSalvata, Modalita, Posizione};
 use crate::ocr::{self, Lettura, Messaggio, StatoOcrCondiviso};
 use crate::pacing::{self, Andatura, Bandierine, Cronometro, Ritmo};
 use crate::schermo;
@@ -385,6 +385,7 @@ enum FonteSlide {
 #[derive(Debug, Clone, PartialEq)]
 struct Preferenze {
     talk: (f32, f32, u32, bool, f32, f32, f32),
+    modalita: Modalita,
     aspetto: (f32, f32, f32, Posizione, f32),
     ocr: (bool, usize, bool, f32, f32, f32, f32, u64, u32, bool),
     finestra: Option<FinestraSalvata>,
@@ -403,6 +404,7 @@ impl Preferenze {
                 cfg.panic_seconds,
                 cfg.stuck_factor,
             ),
+            modalita: cfg.modalita(),
             aspetto: (
                 cfg.scale,
                 cfg.background_opacity,
@@ -459,6 +461,7 @@ impl Ritardometro {
             centro_finestra: None,
             rect_finestra: None,
             in_pausa: false,
+            sorveglia_schermo: cfg.sorveglia_schermo(),
         }));
 
         let (ocr_rx, stato_ocr) = if demo {
@@ -473,7 +476,7 @@ impl Ritardometro {
         };
 
         // Il rilevatore di cambio schermata serve solo quando il gesto è attivo.
-        let schermo_rx = if demo || cfg.stuck_factor <= 0.0 {
+        let schermo_rx = if demo || !cfg.sorveglia_schermo() {
             None
         } else {
             schermo::avvia(Arc::clone(&ocr_condiviso), cc.egui_ctx.clone()).ok()
@@ -839,7 +842,11 @@ impl Ritardometro {
     /// quando non sappiamo su che slide siamo: con il contatore letto
     /// dall'OCR il ritardo lo calcola `andatura()`, che è molto più preciso.
     fn stallo(&self, fase: &Fase, andatura: Option<&Andatura>) -> f32 {
-        if !matches!(fase, Fase::Talk) || andatura.is_some() || !self.cambio_visto {
+        if !matches!(fase, Fase::Talk)
+            || andatura.is_some()
+            || !self.cambio_visto
+            || !self.cfg.sorveglia_schermo()
+        {
             return 0.0;
         }
         pacing::stallo(
@@ -1135,6 +1142,28 @@ impl Ritardometro {
         let durata_prima = self.cfg.duration_minutes;
         let fattore_prima = self.cfg.stuck_factor;
 
+        ui.label(egui::RichText::new("Mode").strong());
+        let corrente = self.cfg.modalita();
+        ui.horizontal(|ui| {
+            for modalita in Modalita::TUTTE {
+                let (nome, spiegazione) = modalita.descrizione();
+                if ui
+                    .selectable_label(corrente == modalita, nome)
+                    .on_hover_text(spiegazione)
+                    .clicked()
+                    && corrente != modalita
+                {
+                    self.cambia_modalita(modalita, ctx_root);
+                }
+            }
+        });
+        ui.label(
+            egui::RichText::new(corrente.descrizione().1)
+                .small()
+                .color(GRIGIO),
+        );
+        ui.separator();
+
         egui::Grid::new("scheda_talk")
             .num_columns(2)
             .spacing([12.0, 8.0])
@@ -1313,35 +1342,25 @@ impl Ritardometro {
 
     /// Lettura del contatore di slide dallo schermo.
     fn scheda_ocr(&mut self, ui: &mut egui::Ui, ctx_root: &egui::Context) {
+        let in_ocr = self.cfg.modalita() == Modalita::Ocr;
+        if !in_ocr {
+            ui.label(
+                egui::RichText::new(
+                    "These settings only apply in OCR mode. Switch mode in the Talk tab.",
+                )
+                .small()
+                .color(GRIGIO),
+            );
+            ui.separator();
+        }
+        ui.add_enabled_ui(in_ocr, |ui| self.griglia_ocr(ui, ctx_root));
+    }
+
+    fn griglia_ocr(&mut self, ui: &mut egui::Ui, ctx_root: &egui::Context) {
         egui::Grid::new("scheda_ocr")
             .num_columns(2)
             .spacing([12.0, 8.0])
             .show(ui, |ui| {
-                ui.label("OCR:");
-                if ui
-                    .checkbox(
-                        &mut self.cfg.ocr.enabled,
-                        "read the slide counter from the screen",
-                    )
-                    .on_hover_text(
-                        "Off = plain timer. The slide number can still be stepped \
-                         with the ← → arrow keys",
-                    )
-                    .changed()
-                {
-                    self.sincronizza_ocr_condiviso();
-                    if self.cfg.ocr.enabled {
-                        self.accendi_ocr(ctx_root);
-                    } else {
-                        self.stato_ocr = "OCR disabled: timer only".to_string();
-                        if matches!(self.fonte_slide, Some(FonteSlide::Ocr(_))) {
-                            self.slide_letta = None;
-                            self.fonte_slide = None;
-                        }
-                    }
-                }
-                ui.end_row();
-
                 ui.label("Monitor:");
                 ui.horizontal(|ui| {
                     if ui
@@ -1567,6 +1586,33 @@ impl Ritardometro {
         }
     }
 
+    /// Passa a un'altra modalità: accende e spegne quello che serve, e butta
+    /// il numero di slide quando nessuno potrà più aggiornarlo.
+    fn cambia_modalita(&mut self, modalita: Modalita, ctx: &egui::Context) {
+        self.cfg.imposta_modalita(modalita);
+        self.sincronizza_ocr_condiviso();
+
+        if modalita == Modalita::Ocr {
+            self.accendi_ocr(ctx);
+        } else {
+            if matches!(self.fonte_slide, Some(FonteSlide::Ocr(_))) {
+                self.slide_letta = None;
+                self.fonte_slide = None;
+            }
+            self.zona_ocr = None;
+        }
+        if self.cfg.sorveglia_schermo() {
+            self.accendi_schermo(ctx);
+        }
+
+        self.stato_ocr = match modalita {
+            Modalita::Ocr => "Starting OCR...".to_string(),
+            Modalita::Schermo => "watching the screen for slide changes".to_string(),
+            Modalita::Timer => "timer only: the screen is not captured".to_string(),
+        };
+        ctx.request_repaint();
+    }
+
     /// Rifà la lista delle bandierine dai minuti/percentuali correnti.
     fn ricalcola_milestone(&mut self) {
         self.bandierine = Bandierine::new(pacing::risolvi_milestone(
@@ -1671,6 +1717,7 @@ impl Ritardometro {
         if let Ok(mut s) = self.ocr_condiviso.lock() {
             s.cfg = self.cfg.ocr.clone();
             s.in_pausa = self.in_pausa();
+            s.sorveglia_schermo = self.cfg.sorveglia_schermo();
         }
     }
 
@@ -1701,6 +1748,7 @@ impl Ritardometro {
                 s.rect_finestra = Some(r);
             }
             s.in_pausa = self.in_pausa();
+            s.sorveglia_schermo = self.cfg.sorveglia_schermo();
         }
     }
 

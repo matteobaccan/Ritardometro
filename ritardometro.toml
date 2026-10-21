@@ -16,6 +16,13 @@ total_slides = 30
 # Automatically start the timer when OCR detects advancing from slide 1 to 2
 auto_start = true
 
+# How Ritardometro works out where you are:
+#   "ocr"    read the slide counter from the screen: slide number, ahead/behind
+#   "screen" no counter to read: watch whether the screen changes and show the
+#            pulsing watch when a slide overstays
+#   "timer"  no screen capture at all: countdown, phases and milestones only
+mode = "ocr"
+
 # Tolerance in seconds to be considered "on track"
 tolerance_seconds = 60
 

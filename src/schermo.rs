@@ -190,7 +190,7 @@ mod disponibile {
                 Ok(s) => s.clone(),
                 Err(_) => return,
             };
-            if stato.in_pausa {
+            if stato.in_pausa || !stato.sorveglia_schermo {
                 precedente = None;
                 std::thread::sleep(Duration::from_millis(150));
                 continue;
