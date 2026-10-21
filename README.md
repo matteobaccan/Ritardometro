@@ -25,6 +25,8 @@ The core philosophy is **one slide per minute** (or your custom slide pacing rat
 2. The native OCR engine extracts the current slide and total (e.g. `14 / 35`).
 3. Ritardometro calculates your time difference in seconds, updates the animated avatar, and adjusts the progress gauge.
 
+A slide number is only shown, and only used for pacing, while it is still being confirmed. If the OCR stops finding the counter — a full-bleed slide, a section divider, OCR switched off — the last number is kept for about one and a half slides and then dropped: without it the slide you are on cannot be known, and a frozen number would show a delay that grows on its own without anyone having said anything wrong. Ritardometro then goes back to being an honest stopwatch (a slide number you set by hand with the ← → arrow keys is yours, and never expires).
+
 When the slides carry no counter at all (so there is nothing to read), Ritardometro watches the screen instead: if it does not change for longer than `stuck_factor` times the average time per slide (`duration / total_slides`), the avatar taps their wrist to tell you that you are dwelling. This runs on Windows and macOS; on macOS the system asks for Screen Recording permission the first time, and `stuck_factor = 0` turns the whole thing off.
 
 ## Installation

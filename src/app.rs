@@ -300,7 +300,11 @@ pub struct Ritardometro {
     crono: Cronometro,
     bandierine: Bandierine,
 
-    slide: Option<u32>,
+    /// Ultimo numero di slide conosciuto, da leggere sempre tramite `slide()`:
+    /// da solo non dice se ci si può ancora credere.
+    slide_letta: Option<u32>,
+    /// Chi ha fornito quel numero, e quando.
+    fonte_slide: Option<FonteSlide>,
     totale_letto: Option<u32>,
     candidata: Option<Lettura>,
     conferme: u8,
@@ -352,6 +356,14 @@ pub struct Ritardometro {
     nascita: Instant,
     /// Modalità demo: simula un talk a velocità accelerata.
     demo: Option<Instant>,
+}
+
+/// Da dove arriva il numero di slide. L'OCR può smettere di confermarlo (un
+/// contatore che sparisce, l'OCR spento); una scelta fatta a mano no.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FonteSlide {
+    Ocr(Instant),
+    Manuale,
 }
 
 /// Le impostazioni che si possono cambiare dal menu (più la posizione della
@@ -447,7 +459,8 @@ impl Ritardometro {
             avviso,
             crono: Cronometro::new(),
             bandierine,
-            slide: None,
+            slide_letta: None,
+            fonte_slide: None,
             totale_letto: None,
             candidata: None,
             conferme: 0,
@@ -498,7 +511,8 @@ impl Ritardometro {
         let f = (sim / durata).min(1.0);
         // prima corre troppo, poi si perde in chiacchiere, poi recupera
         let g = f + 0.13 * (std::f32::consts::TAU * 1.5 * f).sin();
-        self.slide = Some((1 + (g * totale as f32).floor().max(0.0) as u32).min(totale));
+        self.slide_letta = Some((1 + (g * totale as f32).floor().max(0.0) as u32).min(totale));
+        self.fonte_slide = Some(FonteSlide::Manuale);
 
         // Una finestra della demo imita una presentazione senza numerazione
         // rimasta ferma sulla stessa schermata, per mostrare anche il gesto
@@ -506,7 +520,8 @@ impl Ritardometro {
         const DA: f32 = 0.55;
         const A: f32 = 0.72;
         if self.cfg.stuck_factor > 0.0 && (DA..A).contains(&f) {
-            self.slide = None;
+            self.slide_letta = None;
+            self.fonte_slide = None;
             self.cambio_visto = true;
             let soglia = durata / totale as f32 * self.cfg.stuck_factor;
             let avanzamento = (f - DA) / (A - DA);
@@ -517,6 +532,32 @@ impl Ritardometro {
         } else {
             self.cambio_visto = false;
             self.ultimo_cambio = Instant::now();
+        }
+    }
+
+    /// Il numero di slide, ma solo finché ci si può ancora credere.
+    ///
+    /// Quando l'OCR smette di trovare il contatore, il numero fermo diventa in
+    /// fretta una bugia: il tempo passa, chi parla avanza, e il Ritardometro
+    /// mostrerebbe un ritardo inventato che cresce da solo. Passata la
+    /// scadenza si preferisce non sapere su che slide siamo — niente conto
+    /// sulle slide, niente numeri a video — e restare un cronometro onesto.
+    /// Un numero impostato a mano con le frecce invece resta: è un'asserzione
+    /// di chi parla, non una misura che può scadere.
+    fn slide(&self) -> Option<u32> {
+        match self.fonte_slide? {
+            FonteSlide::Manuale => self.slide_letta,
+            FonteSlide::Ocr(quando) => {
+                let scadenza = pacing::scadenza_lettura(
+                    self.cfg.durata_secondi(),
+                    self.totale().unwrap_or(0),
+                );
+                if quando.elapsed().as_secs_f32() < scadenza {
+                    self.slide_letta
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -540,9 +581,10 @@ impl Ritardometro {
         self.sincronizza_ocr_condiviso();
     }
 
-    fn imposta_slide(&mut self, nuova: u32) {
-        let vecchia = self.slide;
-        self.slide = Some(nuova);
+    fn imposta_slide(&mut self, nuova: u32, fonte: FonteSlide) {
+        let vecchia = self.slide_letta;
+        self.slide_letta = Some(nuova);
+        self.fonte_slide = Some(fonte);
         // Avvio automatico: appena si passa alla slide successiva alla prima vista.
         if self.cfg.auto_start && self.crono.mai_avviato() {
             if let Some(v) = vecchia {
@@ -576,7 +618,7 @@ impl Ritardometro {
                         if self.totale_letto == Some(tot)
                             && l.totale.is_none()
                             && l.slide == tot
-                            && self.slide.is_none_or(|cur| cur + 1 < tot)
+                            && self.slide_letta.is_none_or(|cur| cur + 1 < tot)
                         {
                             self.stato_ocr = format!("OCR: detected total only (/{tot})");
                             continue;
@@ -589,17 +631,17 @@ impl Ritardometro {
                         self.conferme = 1;
                     }
                     let immediata = l.totale.is_some()
-                        || self.slide.is_none()
+                        || self.slide_letta.is_none()
                         || self
-                            .slide
+                            .slide_letta
                             .is_some_and(|cur| cur.abs_diff(l.slide) <= 1);
                     if immediata || self.conferme >= 2 {
                         if let Some(t) = l.totale {
                             self.totale_letto = Some(t);
                         }
-                        if self.slide != Some(l.slide) {
-                            self.imposta_slide(l.slide);
-                        }
+                        // Anche una lettura uguale alla precedente conta:
+                        // conferma che il contatore è ancora lì e rimanda la scadenza.
+                        self.imposta_slide(l.slide, FonteSlide::Ocr(Instant::now()));
                         let dove = self.suffisso_zona();
                         self.stato_ocr = match self.totale() {
                             Some(tot) => format!("OCR ok: slide {}/{tot}{dove}", l.slide),
@@ -837,12 +879,12 @@ impl Ritardometro {
             self.cambia_scala(ctx, self.cfg.scale + passo);
         }
         if destra {
-            let s = self.slide.unwrap_or(0) + 1;
-            self.imposta_slide(s);
+            let s = self.slide_letta.unwrap_or(0) + 1;
+            self.imposta_slide(s, FonteSlide::Manuale);
         }
         if sinistra {
-            let s = self.slide.unwrap_or(2).saturating_sub(1).max(1);
-            self.imposta_slide(s);
+            let s = self.slide_letta.unwrap_or(2).saturating_sub(1).max(1);
+            self.imposta_slide(s, FonteSlide::Manuale);
         }
         if esci {
             if self.menu_aperto {
@@ -972,14 +1014,14 @@ impl Ritardometro {
                 ui.label("Slide:");
                 ui.horizontal(|ui| {
                     if ui.button("-1").clicked() {
-                        let s = self.slide.unwrap_or(2).saturating_sub(1).max(1);
-                        self.imposta_slide(s);
+                        let s = self.slide_letta.unwrap_or(2).saturating_sub(1).max(1);
+                        self.imposta_slide(s, FonteSlide::Manuale);
                     }
                     if ui.button("+1").clicked() {
-                        let s = self.slide.unwrap_or(0) + 1;
-                        self.imposta_slide(s);
+                        let s = self.slide_letta.unwrap_or(0) + 1;
+                        self.imposta_slide(s, FonteSlide::Manuale);
                     }
-                    if let Some(sl) = self.slide {
+                    if let Some(sl) = self.slide() {
                         ui.label(format!("({sl}/{})", self.totale().unwrap_or(0)));
                     }
                 });
@@ -1016,6 +1058,12 @@ impl Ritardometro {
                         self.accendi_ocr(ctx_root);
                     } else {
                         self.stato_ocr = "OCR disabled: timer only".to_string();
+                        // Senza OCR quel numero non si aggiorna più: tenerlo
+                        // significherebbe calcolare un ritardo su un dato morto.
+                        if matches!(self.fonte_slide, Some(FonteSlide::Ocr(_))) {
+                            self.slide_letta = None;
+                            self.fonte_slide = None;
+                        }
                     }
                 }
                 ui.end_row();
@@ -1308,7 +1356,7 @@ impl Ritardometro {
         pacing::andatura(
             trascorsi,
             self.cfg.durata_secondi(),
-            self.slide?,
+            self.slide()?,
             self.totale()?,
             self.cfg.tolerance_seconds,
             self.cfg.panic_seconds,
@@ -1544,7 +1592,7 @@ impl eframe::App for Ritardometro {
 
         // Sei arrivato all'ultima slide del talk?
         let ultima_slide = matches!(
-            (self.slide, totale),
+            (self.slide(), totale),
             (Some(sl), Some(tot)) if tot >= 2 && sl >= tot
         );
 
@@ -1555,7 +1603,7 @@ impl eframe::App for Ritardometro {
         } else {
             let oltre = trascorsi - durata;
             // Se a fine tempo sei ancora lontano dall'ultima slide, hai sforato davvero.
-            let indietro = matches!((self.slide, totale), (Some(sl), Some(tot)) if sl + 1 < tot);
+            let indietro = matches!((self.slide(), totale), (Some(sl), Some(tot)) if sl + 1 < tot);
             if !indietro && oltre < domande {
                 Fase::Domande {
                     restanti: domande - oltre,
@@ -1768,7 +1816,7 @@ impl eframe::App for Ritardometro {
 
         // riga di stato
         let riga = match (&fase, &andatura) {
-            (Fase::Attesa, _) => match (self.slide, totale) {
+            (Fase::Attesa, _) => match (self.slide(), totale) {
                 (Some(sl), Some(tot)) => format!("slide {sl}/{tot} — click or advance slide"),
                 (Some(sl), None) => format!("slide {sl} — click or advance slide"),
                 _ if self.cfg.auto_start && self.ocr_rx.is_some() => {
@@ -1781,7 +1829,7 @@ impl eframe::App for Ritardometro {
             (Fase::Sforato { .. }, _) => "time's up!".to_string(),
             (Fase::Talk, _) if ultima_slide => format!(
                 "slide {}/{}  talk finished! applause!",
-                self.slide.unwrap_or(0),
+                self.slide().unwrap_or(0),
                 totale.unwrap_or(0),
             ),
             (Fase::Talk, Some(a)) => {
@@ -1793,7 +1841,7 @@ impl eframe::App for Ritardometro {
                 };
                 format!(
                     "slide {}/{}  {} {}",
-                    self.slide.unwrap_or(0),
+                    self.slide().unwrap_or(0),
                     totale.unwrap_or(0),
                     pacing::scarto(a.scarto_secondi),
                     giudizio
@@ -1803,7 +1851,7 @@ impl eframe::App for Ritardometro {
                 "same screen for {}",
                 pacing::mm_ss(self.ultimo_cambio.elapsed().as_secs_f32())
             ),
-            (Fase::Talk, None) => match self.slide {
+            (Fase::Talk, None) => match self.slide() {
                 Some(sl) => format!("slide {sl}  (unknown total)"),
                 None => "remaining time".to_string(),
             },
@@ -1835,7 +1883,7 @@ impl eframe::App for Ritardometro {
             CornerRadius::same((3.0 * s) as u8),
             applica_op(Color32::from_white_alpha(170)),
         );
-        if let (Some(sl), Some(tot)) = (self.slide, totale) {
+        if let (Some(sl), Some(tot)) = (self.slide(), totale) {
             if tot > 0 {
                 let p = ((sl.saturating_sub(1)) as f32 / tot as f32).clamp(0.0, 1.0);
                 let x = barra.min.x + barra.width() * p;
