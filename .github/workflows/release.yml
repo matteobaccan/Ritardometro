@@ -90,7 +90,10 @@ jobs:
           New-Item -ItemType Directory -Force $dir | Out-Null
           Copy-Item target/${{ matrix.target }}/release/${{ matrix.exe }} $dir/
           Copy-Item ritardometro.toml, README.md, LICENSE $dir/
-          Compress-Archive -Path $dir -DestinationPath "$dir.zip" -Force
+          # Si archivia il contenuto, non la cartella: Windows estraendo crea già
+          # una cartella col nome dello zip, e archiviare anche la nostra
+          # lascerebbe l'eseguibile annidato due volte.
+          Compress-Archive -Path "$dir/*" -DestinationPath "$dir.zip" -Force
           "ARCHIVIO=$dir.zip" | Out-File -FilePath $env:GITHUB_ENV -Append
 
       - name: Package (Linux/macOS)
