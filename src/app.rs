@@ -4,6 +4,7 @@ use crate::avatar::{self, Bandiera, StatoAvatar, GIALLO, ROSSO, VERDE};
 use crate::config::{Caricata, Config, Posizione};
 use crate::ocr::{self, Lettura, Messaggio, StatoOcrCondiviso};
 use crate::pacing::{self, Andatura, Bandierine, Cronometro, Ritmo};
+use crate::schermo;
 use eframe::egui::{
     self, Align2, Color32, CornerRadius, FontId, Id, Key, Pos2, Rect, Sense, Stroke, Vec2,
     ViewportCommand,
@@ -310,6 +311,15 @@ pub struct Ritardometro {
     /// automatica trova il contatore in un altro angolo.
     zona_ocr: Option<ocr::Zona>,
 
+    /// Sorveglianza della schermata, per le presentazioni senza numerazione.
+    schermo_rx: Option<Receiver<schermo::Messaggio>>,
+    /// Ultimo cambio di schermata rilevato.
+    ultimo_cambio: Instant,
+    /// Finché la cattura non ha dato prova di funzionare (almeno un cambio
+    /// visto) non accusiamo nessuno di essersi fermato: su macOS senza permesso
+    /// di registrazione schermo vedremmo un'immagine ferma per sempre.
+    cambio_visto: bool,
+
     posizionato: bool,
     resize_attivo: Option<(egui::ResizeDirection, Pos2, f32)>,
     #[cfg(windows)]
@@ -371,6 +381,13 @@ impl Ritardometro {
             (None, "OCR disabled: timer only".to_string())
         };
 
+        // Il rilevatore di cambio schermata serve solo quando il gesto è attivo.
+        let schermo_rx = if demo || cfg.stuck_factor <= 0.0 {
+            None
+        } else {
+            schermo::avvia(Arc::clone(&ocr_condiviso), cc.egui_ctx.clone()).ok()
+        };
+
         let bandierine = Bandierine::new(pacing::risolvi_milestone(
             &cfg.milestone,
             cfg.durata_secondi(),
@@ -390,6 +407,9 @@ impl Ritardometro {
             ocr_condiviso,
             stato_ocr,
             zona_ocr: None,
+            schermo_rx,
+            ultimo_cambio: Instant::now(),
+            cambio_visto: false,
             posizionato: false,
             resize_attivo: None,
             #[cfg(windows)]
@@ -427,6 +447,25 @@ impl Ritardometro {
         // prima corre troppo, poi si perde in chiacchiere, poi recupera
         let g = f + 0.13 * (std::f32::consts::TAU * 1.5 * f).sin();
         self.slide = Some((1 + (g * totale as f32).floor().max(0.0) as u32).min(totale));
+
+        // Una finestra della demo imita una presentazione senza numerazione
+        // rimasta ferma sulla stessa schermata, per mostrare anche il gesto
+        // dell'orologio: è l'unico modo di vederlo senza un talk vero.
+        const DA: f32 = 0.55;
+        const A: f32 = 0.72;
+        if self.cfg.stuck_factor > 0.0 && (DA..A).contains(&f) {
+            self.slide = None;
+            self.cambio_visto = true;
+            let soglia = durata / totale as f32 * self.cfg.stuck_factor;
+            let avanzamento = (f - DA) / (A - DA);
+            let fermo_da = Duration::from_secs_f32(soglia * (1.0 + avanzamento));
+            self.ultimo_cambio = Instant::now()
+                .checked_sub(fermo_da)
+                .unwrap_or_else(Instant::now);
+        } else {
+            self.cambio_visto = false;
+            self.ultimo_cambio = Instant::now();
+        }
     }
 
     fn totale(&self) -> Option<u32> {
@@ -531,6 +570,43 @@ impl Ritardometro {
                 }
             }
         }
+    }
+
+    /// Legge il thread che sorveglia la schermata (presentazioni senza numerazione).
+    fn ricevi_schermo(&mut self) {
+        let Some(rx) = &self.schermo_rx else { return };
+        let messaggi: Vec<schermo::Messaggio> = rx.try_iter().collect();
+        for m in messaggi {
+            match m {
+                schermo::Messaggio::Cambiato => {
+                    self.ultimo_cambio = Instant::now();
+                    self.cambio_visto = true;
+                }
+                schermo::Messaggio::Errore(e) => {
+                    // Senza catture affidabili il gesto resta disarmato.
+                    self.cambio_visto = false;
+                    if self.ocr_rx.is_none() {
+                        self.stato_ocr = e;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Da quanto tempo la schermata è ferma, come intensità del gesto
+    /// "guarda l'orologio" (0 = niente). Vale solo durante il talk e solo
+    /// quando non sappiamo su che slide siamo: con il contatore letto
+    /// dall'OCR il ritardo lo calcola `andatura()`, che è molto più preciso.
+    fn stallo(&self, fase: &Fase, andatura: Option<&Andatura>) -> f32 {
+        if !matches!(fase, Fase::Talk) || andatura.is_some() || !self.cambio_visto {
+            return 0.0;
+        }
+        pacing::stallo(
+            self.ultimo_cambio.elapsed().as_secs_f32(),
+            self.cfg.durata_secondi(),
+            self.totale().unwrap_or(0),
+            self.cfg.stuck_factor,
+        )
     }
 
     /// `" @ bottom-left"` quando la ricerca automatica ha spostato la cattura
@@ -1246,6 +1322,12 @@ impl eframe::App for Ritardometro {
         self.aggiorna_centro_finestra_ocr(&ctx);
         self.simula();
         self.ricevi_ocr();
+        self.ricevi_schermo();
+        // Con il cronometro fermo non si accumula stallo: la schermata ferma
+        // mentre si è in pausa non è un ritardo.
+        if !self.crono.in_corso() {
+            self.ultimo_cambio = Instant::now();
+        }
         self.tastiera(&ctx);
 
         let area = ui.max_rect();
@@ -1395,8 +1477,9 @@ impl eframe::App for Ritardometro {
         self.mostra_evidenziazione_ocr(&ctx);
 
         // ---------------- stato dell'avatar ----------------
+        let stallo = self.stallo(&fase, andatura.as_ref());
         let (mut stato, colore_scarto) =
-            stato_avatar(&self.cfg, &fase, andatura.as_ref(), ultima_slide);
+            stato_avatar(&self.cfg, &fase, andatura.as_ref(), ultima_slide, stallo);
         stato.opacita = self.cfg.opacity;
         if let Some((testo, p)) = self.bandierine.corrente() {
             if stato.bandiera.is_none() {
@@ -1516,6 +1599,10 @@ impl eframe::App for Ritardometro {
                     giudizio
                 )
             }
+            (Fase::Talk, None) if stallo > 0.0 => format!(
+                "same screen for {}",
+                pacing::mm_ss(self.ultimo_cambio.elapsed().as_secs_f32())
+            ),
             (Fase::Talk, None) => match self.slide {
                 Some(sl) => format!("slide {sl}  (unknown total)"),
                 None => "remaining time".to_string(),
@@ -1594,6 +1681,7 @@ fn stato_avatar(
     fase: &Fase,
     andatura: Option<&Andatura>,
     ultima_slide: bool,
+    stallo: f32,
 ) -> (StatoAvatar, Color32) {
     let tol = cfg.tolerance_seconds;
     let pan = cfg.panic_seconds;
@@ -1608,6 +1696,7 @@ fn stato_avatar(
                 alza_rosso: 0.0,
                 sudore: false,
                 applauso: true,
+                tocca_polso: 0.0,
                 opacita: 1.0,
                 bandiera: Some(Bandiera {
                     testo: "Q&A?".into(),
@@ -1624,6 +1713,7 @@ fn stato_avatar(
                 alza_rosso: 0.0,
                 sudore: false,
                 applauso: true,
+                tocca_polso: 0.0,
                 opacita: 1.0,
                 bandiera: Some(Bandiera {
                     testo: "GREAT!".into(),
@@ -1640,6 +1730,7 @@ fn stato_avatar(
                 alza_rosso: 1.0,
                 sudore: true,
                 applauso: false,
+                tocca_polso: 0.0,
                 opacita: 1.0,
                 bandiera: Some(Bandiera {
                     testo: "STOP!".into(),
@@ -1656,6 +1747,7 @@ fn stato_avatar(
                 alza_rosso: 0.0,
                 sudore: false,
                 applauso: true,
+                tocca_polso: 0.0,
                 opacita: 1.0,
                 bandiera: Some(Bandiera {
                     testo: "GREAT!".into(),
@@ -1664,6 +1756,18 @@ fn stato_avatar(
                 }),
             },
             VERDE,
+        ),
+        // Senza contatore slide l'unico segnale è la schermata che non cambia:
+        // l'avatar si tocca il polso invece di restare neutro e muto.
+        Fase::Talk if andatura.is_none() && stallo > 0.0 => (
+            StatoAvatar {
+                umore: 0.35 - 0.95 * stallo,
+                alza_verde: 0.0,
+                alza_rosso: 0.0,
+                tocca_polso: stallo,
+                ..Default::default()
+            },
+            if stallo > 0.5 { ARANCIO } else { Color32::WHITE },
         ),
         Fase::Talk => match andatura {
             None => (
@@ -1704,6 +1808,7 @@ fn stato_avatar(
                             alza_rosso: 0.45 + 0.55 * f,
                             sudore: a.ritmo == Ritmo::Panico,
                             applauso: false,
+                            tocca_polso: 0.0,
                             opacita: 1.0,
                             bandiera: None,
                         },

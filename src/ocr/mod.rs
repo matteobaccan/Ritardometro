@@ -330,14 +330,7 @@ pub fn info_zona_ocr(cfg: &OcrConfig, centro_finestra: Option<(i32, i32)>) -> Op
 
 /// Restituisce quanti monitor sono stati rilevati sul sistema.
 pub fn numero_monitor() -> usize {
-    #[cfg(windows)]
-    {
-        windows::numero_monitor()
-    }
-    #[cfg(not(windows))]
-    {
-        1
-    }
+    crate::schermo::numero_monitor()
 }
 
 /// Avvia il thread di lettura. Restituisce `Err` se l'OCR non è disponibile.

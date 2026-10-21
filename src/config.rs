@@ -25,6 +25,10 @@ pub struct Config {
     pub tolerance_seconds: f32,
     #[serde(alias = "panico_secondi")]
     pub panic_seconds: f32,
+    /// Presentazioni senza numerazione: multiplo del tempo medio per slide dopo
+    /// il quale, se la schermata non cambia, l'avatar si tocca il polso.
+    /// `0` disattiva del tutto la sorveglianza dello schermo.
+    pub stuck_factor: f32,
     #[serde(alias = "scala")]
     pub scale: f32,
     #[serde(alias = "opacita_sfondo")]
@@ -95,6 +99,7 @@ impl Default for Config {
             auto_start: true,
             tolerance_seconds: 60.0,
             panic_seconds: 180.0,
+            stuck_factor: 1.5,
             scale: 1.0,
             background_opacity: 0.70,
             opacity: 1.0,
@@ -145,6 +150,12 @@ impl Config {
         self.questions_minutes = self.questions_minutes.max(0.0);
         self.tolerance_seconds = self.tolerance_seconds.max(0.0);
         self.panic_seconds = self.panic_seconds.max(self.tolerance_seconds + 1.0);
+        // Sotto il tempo medio per slide il gesto scatterebbe su ogni slide lunga.
+        self.stuck_factor = if self.stuck_factor <= 0.0 {
+            0.0
+        } else {
+            self.stuck_factor.max(1.0)
+        };
         self.scale = self.scale.clamp(0.5, 3.0);
         self.background_opacity = self.background_opacity.clamp(0.0, 1.0);
         self.opacity = self.opacity.clamp(0.15, 1.0);
@@ -228,6 +239,7 @@ mod tests {
         let def = Config::default().normalizza();
         assert_eq!(da_file.duration_minutes, def.duration_minutes);
         assert_eq!(da_file.total_slides, def.total_slides);
+        assert_eq!(da_file.stuck_factor, def.stuck_factor);
         assert_eq!(da_file.position, def.position);
         assert_eq!(da_file.ocr.x, def.ocr.x);
         assert_eq!(da_file.ocr.auto_zone, def.ocr.auto_zone);
@@ -252,6 +264,15 @@ mod tests {
     fn chiave_sconosciuta_e_un_errore() {
         assert!(da_testo("durata_minuto = 45\n").is_err());
         assert!(da_testo("unknown_key = 45\n").is_err());
+    }
+
+    #[test]
+    fn il_fattore_di_stallo_resta_sensato() {
+        assert_eq!(da_testo("stuck_factor = 0\n").unwrap().stuck_factor, 0.0);
+        assert_eq!(da_testo("stuck_factor = -3\n").unwrap().stuck_factor, 0.0);
+        // Sotto 1 il gesto scatterebbe prima del tempo medio di una slide
+        assert_eq!(da_testo("stuck_factor = 0.2\n").unwrap().stuck_factor, 1.0);
+        assert_eq!(da_testo("stuck_factor = 2.5\n").unwrap().stuck_factor, 2.5);
     }
 
     #[test]

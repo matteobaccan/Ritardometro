@@ -131,6 +131,20 @@ pub fn andatura(
     })
 }
 
+/// Intensità del gesto "guarda l'orologio" (0 = niente, 1 = pieno).
+///
+/// Nelle presentazioni senza numerazione non sappiamo su quale slide siamo:
+/// l'unico segnale è da quanto tempo la schermata non cambia, confrontato con
+/// il tempo medio che una slide dovrebbe durare (`durata / totale`).
+/// Il gesto parte a `fattore` volte quel tempo e arriva al massimo al doppio.
+pub fn stallo(fermo_da: f32, durata: f32, totale: u32, fattore: f32) -> f32 {
+    if fattore <= 0.0 || totale == 0 || durata <= 0.0 {
+        return 0.0;
+    }
+    let soglia = durata / totale as f32 * fattore;
+    ((fermo_da - soglia) / soglia).clamp(0.0, 1.0)
+}
+
 // ------------------------------------------------------------------
 // Milestone (bandierine)
 // ------------------------------------------------------------------
@@ -282,6 +296,25 @@ mod tests {
     fn dati_mancanti() {
         assert!(andatura(10.0, D, 0, 30, 60.0, 180.0).is_none());
         assert!(andatura(10.0, D, 3, 0, 60.0, 180.0).is_none());
+    }
+
+    #[test]
+    fn il_gesto_dell_orologio_parte_dopo_il_tempo_medio() {
+        // 30 minuti e 30 slide: un minuto a slide, soglia a 90 secondi
+        let g = |fermo| stallo(fermo, D, 30, 1.5);
+        assert_eq!(g(0.0), 0.0);
+        assert_eq!(g(60.0), 0.0, "una slide lunga quanto la media non è uno stallo");
+        assert_eq!(g(90.0), 0.0, "sulla soglia il gesto non è ancora partito");
+        assert!((g(135.0) - 0.5).abs() < 0.01);
+        assert_eq!(g(180.0), 1.0);
+        assert_eq!(g(600.0), 1.0, "oltre il massimo resta al massimo");
+    }
+
+    #[test]
+    fn senza_dati_il_gesto_non_scatta() {
+        assert_eq!(stallo(9999.0, D, 30, 0.0), 0.0, "fattore 0 = sorveglianza spenta");
+        assert_eq!(stallo(9999.0, D, 0, 1.5), 0.0, "senza totale slide non c'è tempo medio");
+        assert_eq!(stallo(9999.0, 0.0, 30, 1.5), 0.0);
     }
 
     #[test]
