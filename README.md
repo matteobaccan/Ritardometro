@@ -21,13 +21,25 @@ Ritardometro stays always on top of your presentation, reads your current slide 
 
 The core philosophy is **one slide per minute** (or your custom slide pacing ratio): for a 30-minute talk with 30 slides, at minute 12 you should ideally be around slide 13. Transition slides allow you to catch up, and Ritardometro gives you immediate live feedback.
 
+Ritardometro works in one of three **modes**, which you pick in Settings → Talk:
+
+| Mode | What it does |
+|---|---|
+| **OCR** | Reads the slide counter from the screen: slide number, ahead/behind, and the avatar reacting to it. The pulsing watch stays on as a safety net for when the counter disappears |
+| **Screen** | Nothing to read: watches whether the screen changes and shows the pulsing watch when a slide overstays |
+| **Timer** | No screen capture at all: countdown, phases and milestones only. The one mode macOS never asks Screen Recording permission for |
+
+In OCR mode:
+
 1. A background thread captures the screen slide counter area (by default, the bottom-right corner where Marp and PDF presentation viewers display pagination). If nothing is readable there, it automatically scans the other corners and locks onto the one showing the counter.
 2. The native OCR engine extracts the current slide and total (e.g. `14 / 35`).
 3. Ritardometro calculates your time difference in seconds, updates the animated avatar, and adjusts the progress gauge.
 
 A slide number is only shown, and only used for pacing, while it is still being confirmed. If the OCR stops finding the counter — a full-bleed slide, a section divider, OCR switched off — the last number is kept for about one and a half slides and then dropped: without it the slide you are on cannot be known, and a frozen number would show a delay that grows on its own without anyone having said anything wrong. Ritardometro then goes back to being an honest stopwatch (a slide number you set by hand with the ← → arrow keys is yours, and never expires).
 
-When the slides carry no counter at all (so there is nothing to read), Ritardometro watches the screen instead: if it does not change for longer than `stuck_factor` times the average time per slide (`duration / total_slides`), a pulsing watch appears next to the avatar to tell you that you are dwelling. This runs on Windows and macOS; on macOS the system asks for Screen Recording permission the first time, and `stuck_factor = 0` turns the whole thing off.
+In Screen mode — and in OCR mode when the counter cannot be read — Ritardometro watches the screen instead: if it does not change for longer than `stuck_factor` times the average time per slide (`duration / total_slides`), a pulsing watch appears next to the avatar to tell you that you are dwelling. This runs on Windows and macOS; on macOS the system asks for Screen Recording permission the first time, `stuck_factor = 0` turns the watch off without leaving the mode, and Timer mode never captures anything.
+
+A configuration file written before modes existed has no `mode` key: the mode is then worked out from the switches of the time, so you keep the behaviour you had — OCR on means OCR, OCR off with a dwell factor means Screen, both off means Timer.
 
 ## Installation
 
@@ -131,9 +143,9 @@ Everything else is grouped in four tabs:
 
 | Tab | What is in it |
 |---|---|
-| **Talk** | Talk duration, question minutes, total slides, auto start, on-track tolerance, panic threshold, and the dwell watch factor |
+| **Talk** | The mode (OCR / Screen / Timer), talk duration, question minutes, total slides, auto start, on-track tolerance, panic threshold, and the dwell watch factor |
 | **Overlay** | Size, background opacity, avatar & text opacity, starting corner, margin, and a button to move the window back to that corner |
-| **OCR** | OCR on/off, monitor, automatic counter detection, the capture rectangle in percentages, a button to flash it on screen, polling rate, magnification and the debug capture |
+| **OCR** | Monitor, automatic counter detection, the capture rectangle in percentages, a button to flash it on screen, polling rate, magnification and the debug capture. Greyed out unless you are in OCR mode |
 | **Milestones** | The speech balloons: add or remove them, set each one at a percentage of the talk or at minutes left, and type its text |
 
 The footer carries the version, the link to GitHub and the Close / Quit buttons.
@@ -149,6 +161,8 @@ duration_minutes = 30     # Talk duration in minutes (excluding Q&A)
 questions_minutes = 10    # Q&A countdown duration in minutes (0 = none)
 total_slides = 30         # Total slides (0 = auto-detect total from screen e.g. "12 / 40")
 auto_start = true         # Auto-start timer when advancing from slide 1 to 2
+mode = "ocr"              # "ocr" = read the counter, "screen" = watch for changes,
+                          # "timer" = no screen capture at all
 tolerance_seconds = 60    # Seconds of delta considered "on track"
 panic_seconds = 180       # Seconds behind schedule before avatar panics
 scale = 1.0               # Initial overlay scale factor

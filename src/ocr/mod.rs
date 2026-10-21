@@ -23,6 +23,9 @@ pub struct StatoOcrCondiviso {
     pub rect_finestra: Option<(i32, i32, i32, i32)>,
     /// Se vero, il cronometro è in pausa e l'OCR non deve leggere lo schermo.
     pub in_pausa: bool,
+    /// Se falso, nessuno deve catturare lo schermo per l'orologio: in modalità
+    /// Timer non si tocca lo schermo affatto.
+    pub sorveglia_schermo: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -61,6 +61,7 @@ fn ciclo(
             centro_finestra: None,
             rect_finestra: None,
             in_pausa: false,
+            sorveglia_schermo: false,
         })
     };
     let mut scansione = Scansione::new(&leggi_stato().cfg);

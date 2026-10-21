@@ -21,6 +21,9 @@ pub struct Config {
     pub total_slides: u32,
     #[serde(alias = "avvio_automatico")]
     pub auto_start: bool,
+    /// `"ocr"`, `"screen"` o `"timer"`. Assente nei file scritti prima che
+    /// esistesse: in quel caso si deduce dai due interruttori di allora.
+    pub mode: Option<Modalita>,
     #[serde(alias = "tolleranza_secondi")]
     pub tolerance_seconds: f32,
     #[serde(alias = "panico_secondi")]
@@ -52,6 +55,54 @@ pub struct Config {
 pub struct FinestraSalvata {
     pub x: i32,
     pub y: i32,
+}
+
+/// Come il Ritardometro capisce a che punto sei.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+pub enum Modalita {
+    /// Legge il contatore di slide dallo schermo: slide, anticipo e ritardo.
+    #[serde(rename = "ocr")]
+    Ocr,
+    /// Non legge niente, guarda solo se la schermata cambia: niente numeri,
+    /// ma l'orologio quando resti fermo. Per le presentazioni senza contatore.
+    #[serde(rename = "screen")]
+    Schermo,
+    /// Nessuna cattura dello schermo: solo conto alla rovescia e milestone.
+    #[serde(rename = "timer")]
+    Timer,
+}
+
+impl Modalita {
+    pub const TUTTE: [Modalita; 3] = [Modalita::Ocr, Modalita::Schermo, Modalita::Timer];
+
+    pub fn nome(self) -> &'static str {
+        match self {
+            Modalita::Ocr => "ocr",
+            Modalita::Schermo => "screen",
+            Modalita::Timer => "timer",
+        }
+    }
+
+    /// Etichetta e spiegazione per il menu.
+    pub fn descrizione(self) -> (&'static str, &'static str) {
+        match self {
+            Modalita::Ocr => (
+                "OCR",
+                "Read the slide counter from the screen: slide number, ahead/behind, \
+                 and the avatar reacting to it",
+            ),
+            Modalita::Schermo => (
+                "Screen",
+                "No counter to read: watch whether the screen changes and show the \
+                 pulsing watch when a slide overstays",
+            ),
+            Modalita::Timer => (
+                "Timer",
+                "No screen capture at all: countdown, phases and milestones only. \
+                 The only mode macOS never asks Screen Recording permission for",
+            ),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -128,6 +179,10 @@ impl Default for Config {
             questions_minutes: 10.0,
             total_slides: 30,
             auto_start: true,
+            // Non `Some(Ocr)`: `#[serde(default)]` userebbe questo valore per i
+            // file senza la chiave, e la deduzione dai vecchi interruttori non
+            // scatterebbe mai. `normalizza()` lo risolve subito dopo la lettura.
+            mode: None,
             tolerance_seconds: 60.0,
             panic_seconds: 180.0,
             stuck_factor: 1.5,
@@ -176,8 +231,37 @@ impl Config {
         self.duration_minutes * 60.0
     }
 
+    /// La modalità in uso.
+    ///
+    /// Un file scritto prima che la chiave esistesse non la contiene: la si
+    /// deduce da come erano messi i due interruttori di allora, così chi
+    /// aggiorna ritrova il comportamento che aveva.
+    pub fn modalita(&self) -> Modalita {
+        self.mode.unwrap_or(if self.ocr.enabled {
+            Modalita::Ocr
+        } else if self.stuck_factor > 0.0 {
+            Modalita::Schermo
+        } else {
+            Modalita::Timer
+        })
+    }
+
+    /// Cambia modalità tenendo allineato il vecchio interruttore dell'OCR,
+    /// che resta quello che il thread di lettura guarda a ogni giro.
+    pub fn imposta_modalita(&mut self, modalita: Modalita) {
+        self.mode = Some(modalita);
+        self.ocr.enabled = modalita == Modalita::Ocr;
+    }
+
+    /// Se lo schermo va sorvegliato per l'orologio: in modalità OCR resta come
+    /// rete di sicurezza per quando il contatore sparisce, in Timer mai.
+    pub fn sorveglia_schermo(&self) -> bool {
+        self.modalita() != Modalita::Timer && self.stuck_factor > 0.0
+    }
+
     /// Corregge valori impossibili invece di far fallire l'avvio sul palco.
     fn normalizza(mut self) -> Self {
+        self.mode = Some(self.modalita());
         self.duration_minutes = self.duration_minutes.max(1.0);
         self.questions_minutes = self.questions_minutes.max(0.0);
         self.tolerance_seconds = self.tolerance_seconds.max(0.0);
@@ -416,6 +500,7 @@ pub fn aggiorna_testo(testo: &str, cfg: &Config, salta: &[&str]) -> String {
         (None, "questions_minutes", numero(cfg.questions_minutes)),
         (None, "total_slides", cfg.total_slides.to_string()),
         (None, "auto_start", cfg.auto_start.to_string()),
+        (None, "mode", stringa_toml(cfg.modalita().nome())),
         (None, "tolerance_seconds", numero(cfg.tolerance_seconds)),
         (None, "panic_seconds", numero(cfg.panic_seconds)),
         (None, "stuck_factor", numero(cfg.stuck_factor)),
@@ -476,6 +561,7 @@ fn config_personalizzata() -> Config {
             questions_minutes: 0.0,
             total_slides: 64,
             auto_start: false,
+            mode: Some(Modalita::Schermo),
             tolerance_seconds: 30.0,
             panic_seconds: 120.0,
             stuck_factor: 2.5,
@@ -510,6 +596,55 @@ fn config_personalizzata() -> Config {
                 },
             ],
         }
+    }
+
+#[test]
+    fn la_modalita_si_deduce_dai_vecchi_interruttori() {
+        // File scritti prima che `mode` esistesse: niente chiave, due interruttori
+        let ocr = da_testo("[ocr]\nenabled = true\n").unwrap();
+        assert_eq!(ocr.modalita(), Modalita::Ocr);
+
+        let schermo = da_testo("stuck_factor = 1.5\n[ocr]\nenabled = false\n").unwrap();
+        assert_eq!(schermo.modalita(), Modalita::Schermo);
+
+        let timer = da_testo("stuck_factor = 0\n[ocr]\nenabled = false\n").unwrap();
+        assert_eq!(timer.modalita(), Modalita::Timer);
+
+        // e la chiave esplicita vince su qualsiasi deduzione
+        let esplicita = da_testo("mode = \"timer\"\n[ocr]\nenabled = true\n").unwrap();
+        assert_eq!(esplicita.modalita(), Modalita::Timer);
+    }
+
+    #[test]
+    fn cambiare_modalita_tiene_allineato_l_interruttore_ocr() {
+        let mut c = Config::default();
+        c.imposta_modalita(Modalita::Schermo);
+        assert!(!c.ocr.enabled, "in modalità schermo l'OCR non deve leggere");
+        assert!(c.sorveglia_schermo());
+
+        c.imposta_modalita(Modalita::Timer);
+        assert!(!c.ocr.enabled);
+        assert!(!c.sorveglia_schermo(), "in timer non si cattura niente");
+
+        c.imposta_modalita(Modalita::Ocr);
+        assert!(c.ocr.enabled);
+        assert!(
+            c.sorveglia_schermo(),
+            "in OCR l'orologio resta come rete di sicurezza"
+        );
+
+        // ma resta spegnibile mettendo a zero la soglia
+        c.stuck_factor = 0.0;
+        assert!(!c.sorveglia_schermo());
+    }
+
+    #[test]
+    fn la_modalita_sopravvive_al_salvataggio() {
+        let mut c = Config::default();
+        c.imposta_modalita(Modalita::Schermo);
+        let riletta = da_testo(&aggiorna_testo(TEMPLATE, &c, &[])).unwrap();
+        assert_eq!(riletta.modalita(), Modalita::Schermo);
+        assert!(!riletta.ocr.enabled);
     }
 
     #[test]
