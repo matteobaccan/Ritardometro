@@ -82,9 +82,11 @@ fn main() -> eframe::Result {
     let mut caricata = config::carica(&percorso);
     if let Some(m) = args.minuti {
         caricata.config.duration_minutes = m.max(1.0);
+        caricata.da_cli.push("duration_minutes");
     }
     if let Some(s) = args.slide {
         caricata.config.total_slides = s;
+        caricata.da_cli.push("total_slides");
     }
     if let Some(e) = errore_args {
         caricata.avviso = Some(e);

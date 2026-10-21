@@ -117,26 +117,28 @@ Keys work when the overlay is focused (click on it); during your talk, your focu
 
 ### Settings Window (Right Click)
 
-| Control | Description |
+Every setting lives here: there is nothing you have to edit by hand. Changes apply straight away and are written back to `ritardometro.toml` a moment later, comments and all, so they are still there at the next launch.
+
+The controls you reach for *during* a talk stay visible above the tabs:
+
+| Always visible | Description |
 |---|---|
 | Pause / Start, Reset | Same as `Space` and `R` |
-| Time −1 / +1 min | Adjust elapsed talk time |
-| Slide −1 / +1 | Manually step slide number |
-| Size − / + / 100% | Scale overlay size |
-| OCR: Read the slide counter from the screen | Turns slide OCR on or off without restarting (off = plain timer) |
-| OCR Monitor: Auto | Captures the display where Ritardometro currently resides |
-| Detected Displays: Mon 1, Mon 2… | Pin OCR capture to a specific display |
-| Auto-detect: Find the slide counter in any corner | Scans the other corners when the configured area reads nothing, and locks onto the one with the counter |
-| Highlight OCR Zone on Screen | Flashes a spotlight border over the active OCR capture area |
-| OCR Rate | Polling interval (200 / 350 / 500 ms) |
-| Save ritardometro-debug.png | Saves raw OCR captures for tuning capture boundaries |
-| Transparency: Background, Avatar & Text | Independent opacity controls for HUD and avatar |
-| Open Configuration File | Opens `ritardometro.toml` in your default text editor |
-| — | Everything changed in this window is written back to `ritardometro.toml` a moment later, comments and all |
-| Ritardometro vX.Y.Z · GitHub | Current version & direct link to GitHub repository |
-| Close Menu / Quit App | Dismiss window or exit application |
+| Time −1 / +1 | Adjust the elapsed talk time |
+| Slide −1 / +1 | Step the slide number by hand |
 
-Changes made via the Settings window apply immediately to your active session; edit `ritardometro.toml` to make them permanent defaults.
+Everything else is grouped in four tabs:
+
+| Tab | What is in it |
+|---|---|
+| **Talk** | Talk duration, question minutes, total slides, auto start, on-track tolerance, panic threshold, and the dwell watch factor |
+| **Overlay** | Size, background opacity, avatar & text opacity, starting corner, margin, and a button to move the window back to that corner |
+| **OCR** | OCR on/off, monitor, automatic counter detection, the capture rectangle in percentages, a button to flash it on screen, polling rate, magnification and the debug capture |
+| **Milestones** | The speech balloons: add or remove them, set each one at a percentage of the talk or at minutes left, and type its text |
+
+The footer carries the version, the link to GitHub and the Close / Quit buttons.
+
+Two settings deserve a note. `--minutes` and `--slides` given on the command line apply to that run only and are deliberately *not* written to the file. And a configuration file that cannot be parsed is never overwritten: Ritardometro falls back to the defaults and leaves your file alone.
 
 ## Configuration
 
