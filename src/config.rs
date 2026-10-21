@@ -67,6 +67,18 @@ pub enum Posizione {
     BottomRight,
 }
 
+impl Posizione {
+    /// Nome come appare nel file di configurazione.
+    pub fn nome(self) -> &'static str {
+        match self {
+            Posizione::TopLeft => "top-left",
+            Posizione::TopRight => "top-right",
+            Posizione::BottomLeft => "bottom-left",
+            Posizione::BottomRight => "bottom-right",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct OcrConfig {
@@ -311,17 +323,97 @@ fn numero(v: f32) -> String {
         .to_string()
 }
 
-/// Applica al testo del file tutte le impostazioni modificabili dal menu.
+/// Virgolette e caratteri speciali di un testo libero, in forma TOML.
+fn stringa_toml(valore: &str) -> String {
+    let mut out = String::with_capacity(valore.len() + 2);
+    out.push('"');
+    for c in valore.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u{:04X}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Riscrive i blocchi `[[milestone]]`.
+///
+/// È una lista, non una chiave: non si può correggere riga per riga come le
+/// altre, quindi i blocchi esistenti vengono tolti e riscritti in fondo. I
+/// commenti che li precedono restano al loro posto; quelli scritti *dentro* un
+/// blocco no, ed è l'unico pezzo di file che il programma non sa conservare.
+fn imposta_milestone(testo: &str, lista: &[MilestoneConfig]) -> String {
+    let mut righe: Vec<&str> = Vec::new();
+    let mut dentro = false;
+    for riga in testo.lines() {
+        let t = riga.trim();
+        if t.starts_with('[') {
+            dentro = t == "[[milestone]]";
+            if dentro {
+                continue;
+            }
+        }
+        let chiave_lista =
+            !dentro && t.split_once('=').is_some_and(|(k, _)| k.trim() == "milestone");
+        if dentro || chiave_lista {
+            continue;
+        }
+        righe.push(riga);
+    }
+    let mut out = righe.join("\n");
+    while out.ends_with('\n') {
+        out.pop();
+    }
+    out.push('\n');
+
+    if lista.is_empty() {
+        // Senza la chiave esplicita, un file senza blocchi riprenderebbe le
+        // milestone di default: chi le ha tolte tutte le rivedrebbe comparire.
+        return imposta_chiave(&out, None, "milestone", "[]");
+    }
+    for m in lista {
+        out.push_str("\n[[milestone]]\n");
+        if let Some(p) = m.percentage {
+            out.push_str(&format!("percentage = {}\n", numero(p)));
+        } else if let Some(min) = m.minutes_left {
+            out.push_str(&format!("minutes_left = {}\n", numero(min)));
+        }
+        out.push_str(&format!("text = {}\n", stringa_toml(&m.text)));
+    }
+    out
+}
+
+/// Applica al testo del file tutte le impostazioni modificabili dal menu,
+/// che da quando il menu le copre tutte vuol dire: tutte.
 pub fn aggiorna_testo(testo: &str, cfg: &Config) -> String {
     let mut t = testo.to_string();
     for (sezione, chiave, valore) in [
+        (None, "duration_minutes", numero(cfg.duration_minutes)),
+        (None, "questions_minutes", numero(cfg.questions_minutes)),
+        (None, "total_slides", cfg.total_slides.to_string()),
+        (None, "auto_start", cfg.auto_start.to_string()),
+        (None, "tolerance_seconds", numero(cfg.tolerance_seconds)),
+        (None, "panic_seconds", numero(cfg.panic_seconds)),
+        (None, "stuck_factor", numero(cfg.stuck_factor)),
         (None, "scale", numero(cfg.scale)),
         (None, "background_opacity", numero(cfg.background_opacity)),
         (None, "opacity", numero(cfg.opacity)),
+        (None, "position", stringa_toml(cfg.position.nome())),
+        (None, "margin", numero(cfg.margin)),
         (Some("ocr"), "enabled", cfg.ocr.enabled.to_string()),
         (Some("ocr"), "monitor", cfg.ocr.monitor.to_string()),
         (Some("ocr"), "auto_zone", cfg.ocr.auto_zone.to_string()),
+        (Some("ocr"), "x", numero(cfg.ocr.x)),
+        (Some("ocr"), "y", numero(cfg.ocr.y)),
+        (Some("ocr"), "width", numero(cfg.ocr.width)),
+        (Some("ocr"), "height", numero(cfg.ocr.height)),
         (Some("ocr"), "interval_ms", cfg.ocr.interval_ms.to_string()),
+        (Some("ocr"), "magnification", cfg.ocr.magnification.to_string()),
         (Some("ocr"), "save_debug", cfg.ocr.save_debug.to_string()),
     ] {
         t = imposta_chiave(&t, sezione, chiave, &valore);
@@ -330,7 +422,7 @@ pub fn aggiorna_testo(testo: &str, cfg: &Config) -> String {
         t = imposta_chiave(&t, Some("window"), "x", &f.x.to_string());
         t = imposta_chiave(&t, Some("window"), "y", &f.y.to_string());
     }
-    t
+    imposta_milestone(&t, &cfg.milestone)
 }
 
 /// Salva le impostazioni nel file di configurazione, conservandone i commenti.
@@ -356,7 +448,110 @@ pub fn salva(percorso: &Path, cfg: &Config) -> Result<(), String> {
 mod tests {
     use super::*;
 
-#[test]
+fn config_personalizzata() -> Config {
+        Config {
+            duration_minutes: 45.0,
+            questions_minutes: 0.0,
+            total_slides: 64,
+            auto_start: false,
+            tolerance_seconds: 30.0,
+            panic_seconds: 120.0,
+            stuck_factor: 2.5,
+            scale: 1.45,
+            background_opacity: 0.0,
+            opacity: 0.8,
+            position: Posizione::BottomLeft,
+            margin: 8.0,
+            ocr: OcrConfig {
+                enabled: false,
+                monitor: 2,
+                auto_zone: false,
+                x: 0.1,
+                y: 0.05,
+                width: 0.25,
+                height: 0.2,
+                interval_ms: 500,
+                magnification: 5,
+                save_debug: true,
+            },
+            window: Some(FinestraSalvata { x: 100, y: 200 }),
+            milestone: vec![
+                MilestoneConfig {
+                    percentage: Some(25.0),
+                    minutes_left: None,
+                    text: "ONE QUARTER".into(),
+                },
+                MilestoneConfig {
+                    percentage: None,
+                    minutes_left: Some(2.5),
+                    text: "wrap it up \"now\"".into(),
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn ogni_impostazione_del_menu_torna_indietro_dal_file() {
+        let c = config_personalizzata();
+        let scritta = aggiorna_testo(TEMPLATE, &c);
+        let riletta = da_testo(&scritta).expect("il file deve restare valido");
+
+        assert_eq!(riletta.duration_minutes, c.duration_minutes);
+        assert_eq!(riletta.questions_minutes, c.questions_minutes);
+        assert_eq!(riletta.total_slides, c.total_slides);
+        assert_eq!(riletta.auto_start, c.auto_start);
+        assert_eq!(riletta.tolerance_seconds, c.tolerance_seconds);
+        assert_eq!(riletta.panic_seconds, c.panic_seconds);
+        assert_eq!(riletta.stuck_factor, c.stuck_factor);
+        assert_eq!(riletta.scale, c.scale);
+        assert_eq!(riletta.background_opacity, c.background_opacity);
+        assert_eq!(riletta.opacity, c.opacity);
+        assert_eq!(riletta.position, c.position);
+        assert_eq!(riletta.margin, c.margin);
+        assert_eq!(riletta.window, c.window);
+        assert_eq!(riletta.milestone, c.milestone);
+
+        let o = &riletta.ocr;
+        assert_eq!(o.enabled, c.ocr.enabled);
+        assert_eq!(o.monitor, c.ocr.monitor);
+        assert_eq!(o.auto_zone, c.ocr.auto_zone);
+        assert_eq!((o.x, o.y, o.width, o.height), (0.1, 0.05, 0.25, 0.2));
+        assert_eq!(o.interval_ms, c.ocr.interval_ms);
+        assert_eq!(o.magnification, c.ocr.magnification);
+        assert_eq!(o.save_debug, c.ocr.save_debug);
+
+        // e i commenti del template restano tutti al loro posto
+        for riga in TEMPLATE.lines().filter(|r| r.trim_start().starts_with('#')) {
+            assert!(scritta.lines().any(|r| r == riga), "commento perso: {riga}");
+        }
+    }
+
+    #[test]
+    fn le_milestone_si_riscrivono_senza_duplicarsi() {
+        let c = config_personalizzata();
+        let primo = aggiorna_testo(TEMPLATE, &c);
+        assert_eq!(primo.matches("[[milestone]]").count(), 2);
+        // un secondo salvataggio sullo stesso file non accumula blocchi
+        let secondo = aggiorna_testo(&primo, &c);
+        assert_eq!(secondo.matches("[[milestone]]").count(), 2);
+        let riletta = da_testo(&secondo).unwrap();
+        assert_eq!(riletta.milestone, c.milestone);
+        // il testo con le virgolette sopravvive al giro
+        assert_eq!(riletta.milestone[1].text, "wrap it up \"now\"");
+    }
+
+    #[test]
+    fn togliere_tutte_le_milestone_non_le_fa_ricomparire() {
+        let c = Config {
+            milestone: Vec::new(),
+            ..Config::default()
+        };
+        let t = aggiorna_testo(TEMPLATE, &c);
+        assert!(!t.contains("[[milestone]]"));
+        assert!(da_testo(&t).unwrap().milestone.is_empty());
+    }
+
+    #[test]
     fn salvare_non_tocca_commenti_e_altre_chiavi() {
         let c = Config {
             scale: 1.3,
