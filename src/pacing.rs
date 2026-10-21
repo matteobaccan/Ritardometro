@@ -131,6 +131,25 @@ pub fn andatura(
     })
 }
 
+/// Per quanto tempo si può ancora credere all'ultimo numero di slide letto
+/// dall'OCR, quando l'OCR ha smesso di trovarlo.
+///
+/// Un contatore che sparisce (una slide a tutto schermo, una di sezione) non
+/// rende subito sbagliato il numero di prima: si è probabilmente ancora lì.
+/// Ma più passa il tempo, più è probabile che si sia andati avanti senza che
+/// nessuno lo veda, e un numero fermo produrrebbe un ritardo inventato che
+/// cresce da solo. Si tiene una volta e mezza il tempo medio di una slide,
+/// tra i 20 secondi e i 3 minuti.
+pub fn scadenza_lettura(durata: f32, totale: u32) -> f32 {
+    if totale == 0 || durata <= 0.0 {
+        return SCADENZA_MINIMA;
+    }
+    (durata / totale as f32 * 1.5).clamp(SCADENZA_MINIMA, SCADENZA_MASSIMA)
+}
+
+const SCADENZA_MINIMA: f32 = 20.0;
+const SCADENZA_MASSIMA: f32 = 180.0;
+
 /// Intensità del gesto "guarda l'orologio" (0 = niente, 1 = pieno).
 ///
 /// Nelle presentazioni senza numerazione non sappiamo su quale slide siamo:
@@ -296,6 +315,19 @@ mod tests {
     fn dati_mancanti() {
         assert!(andatura(10.0, D, 0, 30, 60.0, 180.0).is_none());
         assert!(andatura(10.0, D, 3, 0, 60.0, 180.0).is_none());
+    }
+
+    #[test]
+    fn quanto_dura_la_fiducia_in_una_lettura() {
+        // 30 minuti e 30 slide: un minuto a slide, si tiene il numero 90 secondi
+        assert_eq!(scadenza_lettura(D, 30), 90.0);
+        // Slide velocissime: non si scende sotto i 20 secondi, altrimenti il
+        // numero sparirebbe a ogni slide di sezione senza contatore
+        assert_eq!(scadenza_lettura(D, 300), 20.0);
+        // Slide lunghissime: non si superano i 3 minuti di numero fermo
+        assert_eq!(scadenza_lettura(D, 2), 180.0);
+        // Senza totale non si sa quanto duri una slide: minimo prudente
+        assert_eq!(scadenza_lettura(D, 0), 20.0);
     }
 
     #[test]
